@@ -153,7 +153,7 @@ teacher-productivity-system/
 ## 1️⃣ Clone the repository
 
 ```bash
-git clone https://github.com/your-username/teacher-productivity-system.git
+git clone https://github.com/ClassOps/teacher-productivity-system.git
 cd teacher-productivity-system
 ```
 
@@ -170,7 +170,7 @@ cd backend
 Install dependencies:
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements
 ```
 
 Run the server:
