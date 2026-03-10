@@ -96,7 +96,7 @@ export default function App() {
 
   const fetchCourses = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/courses`);
+      const res = await fetch(`${API_BASE}/api/courses`, { credentials: "include" });
       const data = await res.json();
       setCourses(Array.isArray(data) ? data : []);
       if (Array.isArray(data) && data.length > 0 && !selectedCourseId) {
@@ -110,7 +110,7 @@ export default function App() {
   const fetchStudents = async (courseId) => {
     if (!courseId) return;
     try {
-      const res = await fetch(`${API_BASE}/api/courses/${courseId}/students`);
+      const res = await fetch(`${API_BASE}/api/courses/${courseId}/students`, { credentials: "include" });
       const data = await res.json();
       setStudents(data);
       
@@ -127,14 +127,23 @@ export default function App() {
     setIsSyncing(true);
     try {
       const res = await fetch(`${API_BASE}/api/courses/${selectedCourseId}/sync-students`, {
-        method: "POST"
+        method: "POST",
+        credentials: "include"
       });
+      if (res.status === 401) {
+        window.location.href = `${API_BASE}/api/auth/google`;
+        return;
+      }
+      const payload = await res.json();
       if (res.ok) {
         fetchStudents(selectedCourseId);
-        alert("Students synced successfully!");
+        const count = payload?.count ?? 0;
+        alert(`Students synced successfully! (${count})`);
+        if (count === 0) {
+          alert("No students returned from Google Classroom. Check the People tab or re-sync OAuth scopes.");
+        }
       } else {
-        const error = await res.json();
-        alert(error.error || "Sync failed.");
+        alert(payload?.error || "Sync failed.");
       }
     } catch (err) {
       alert("Error syncing students");
@@ -185,16 +194,22 @@ export default function App() {
         student_id: parseInt(id),
         status
       }));
-      
-      await fetch("http://localhost:5000/api/attendance", {
+
+      const res = await fetch("http://localhost:5000/api/attendance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          course_id: parseInt(selectedCourseId), 
-          date: attendanceDate, 
-          records 
+        credentials: "include",
+        body: JSON.stringify({
+          course_id: parseInt(selectedCourseId),
+          date: attendanceDate,
+          records
         })
       });
+      const payload = await res.json();
+      if (!res.ok) {
+        alert(payload?.error || "Error saving attendance");
+        return;
+      }
       alert("Attendance saved!");
     } catch (err) {
       alert("Error saving attendance");
@@ -500,3 +515,6 @@ export default function App() {
     </div>
   );
 }
+
+
+
