@@ -1,112 +1,194 @@
 import React, { useState } from 'react';
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Input } from "@/components/ui/input";
+import './App.css';
 
 export default function App() {
+  const [activeTab, setActiveTab] = useState("overview");
   const [qPaperTopic, setQPaperTopic] = useState("");
   const [generatedPaper, setGeneratedPaper] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [error, setError] = useState("");
 
   const handleGoogleSync = () => {
     window.location.href = "http://localhost:5000/api/auth/google";
   };
 
   const generatePaper = async () => {
-    const res = await fetch("http://localhost:5000/api/question-paper/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topic: qPaperTopic, difficulty: "Hard" })
-    });
-    const data = await res.json();
-    setGeneratedPaper(data.question_paper);
+    setError("");
+    setGeneratedPaper("");
+    setIsGenerating(true);
+    try {
+      const res = await fetch("http://localhost:5000/api/question-paper/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic: qPaperTopic, difficulty: "Hard" })
+      });
+      if (!res.ok) {
+        throw new Error(`Request failed with status ${res.status}`);
+      }
+      const data = await res.json();
+      const content = data?.question_paper || data?.questionPaper || "No question paper returned.";
+      setGeneratedPaper(content);
+    } catch (err) {
+      setError("Could not generate the question paper. Check the backend server and try again.");
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
-      <header className="mb-8 flex justify-between items-center">
+    <div className="app">
+      <header className="header">
         <div>
-          <h1 className="text-3xl font-bold text-slate-900">EduSync OS</h1>
-          <p className="text-slate-500">Teacher Workflow Automation Dashboard</p>
+          <p className="kicker">Teacher Workflow Automation</p>
+          <h1>EduSync OS</h1>
+          <p className="subtitle">Keep syllabus targets, compliance metrics, and AI tools in one focused workspace.</p>
         </div>
-        <Button onClick={handleGoogleSync} className="bg-blue-600 hover:bg-blue-700">
+        <button className="primary" onClick={handleGoogleSync}>
           Sync with Google Classroom
-        </Button>
+        </button>
       </header>
 
-      <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="overview">Overview & Targets</TabsTrigger>
-          <TabsTrigger value="attendance">Attendance</TabsTrigger>
-          <TabsTrigger value="ai-tools">AI Tools (Q-Paper & Plagiarism)</TabsTrigger>
-          <TabsTrigger value="timetable">Timetable</TabsTrigger>
-        </TabsList>
+      <div className="tabs">
+        <div className="tab-list" role="tablist" aria-label="Dashboard Sections">
+          {[
+            { id: "overview", label: "Overview & Targets" },
+            { id: "attendance", label: "Attendance" },
+            { id: "ai-tools", label: "AI Tools" },
+            { id: "timetable", label: "Timetable" }
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              className={`tab-button ${activeTab === tab.id ? "active" : ""}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
-        {/* OVERVIEW TAB */}
-        <TabsContent value="overview" className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Material & Target Completion</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ul className="space-y-2">
-                <li className="flex justify-between items-center bg-white p-3 rounded shadow-sm border">
-                  <span>Unit 1: Data Structures</span>
-                  <span className="text-green-600 text-sm font-bold">Completed</span>
-                </li>
-                <li className="flex justify-between items-center bg-white p-3 rounded shadow-sm border">
-                  <span>Unit 2: Algorithms</span>
-                  <span className="text-orange-500 text-sm font-bold">Pending (Due: Oct 12)</span>
-                </li>
-              </ul>
-              <Button className="mt-4 w-full" variant="outline">+ Add Syllabus Target</Button>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>NBA/NAAC Metrics Data</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-gray-500 mb-4">Export mapped Course Outcomes (CO) & Program Outcomes (PO) directly to Excel for COE submission.</p>
-              <Button className="w-full">Generate NBA Compliance Report</Button>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* AI TOOLS TAB */}
-        <TabsContent value="ai-tools" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Bloom's Taxonomy Question Paper Generator</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex space-x-2 mb-4">
-                <Input
-                  placeholder="Enter Topic (e.g., Operating Systems)"
-                  value={qPaperTopic}
-                  onChange={(e) => setQPaperTopic(e.target.value)}
-                />
-                <Button onClick={generatePaper}>Generate</Button>
+        {activeTab === "overview" && (
+          <section className="grid">
+            <div className="card">
+              <div className="card-header">
+                <h3>Material & Target Completion</h3>
+                <p>Track progress by unit and upcoming deadlines.</p>
               </div>
-              {generatedPaper && (
-                <div className="bg-gray-100 p-4 rounded whitespace-pre-wrap font-mono text-sm h-64 overflow-y-auto">
-                  {generatedPaper}
+              <div className="card-body">
+                <ul className="list">
+                  <li>
+                    <span>Unit 1: Data Structures</span>
+                    <span className="status success">Completed</span>
+                  </li>
+                  <li>
+                    <span>Unit 2: Algorithms</span>
+                    <span className="status warn">Pending (Due: Oct 12)</span>
+                  </li>
+                </ul>
+                <button className="ghost">+ Add Syllabus Target</button>
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="card-header">
+                <h3>NBA/NAAC Metrics Data</h3>
+                <p>Export mapped CO & PO outcomes for compliance.</p>
+              </div>
+              <div className="card-body">
+                <div className="metric-grid">
+                  <div>
+                    <p className="metric-label">CO Coverage</p>
+                    <p className="metric-value">84%</p>
+                  </div>
+                  <div>
+                    <p className="metric-label">PO Mapping</p>
+                    <p className="metric-value">92%</p>
+                  </div>
+                  <div>
+                    <p className="metric-label">Last Export</p>
+                    <p className="metric-value">Mar 6</p>
+                  </div>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
+                <button className="primary full">Generate NBA Compliance Report</button>
+              </div>
+            </div>
+          </section>
+        )}
 
-        {/* OTHER TABS (Placeholders for Dev 4) */}
-        <TabsContent value="attendance">
-          <Card><CardContent className="pt-6">Attendance Tracker UI goes here...</CardContent></Card>
-        </TabsContent>
-        <TabsContent value="timetable">
-          <Card><CardContent className="pt-6">Timetable Grid UI goes here...</CardContent></Card>
-        </TabsContent>
+        {activeTab === "ai-tools" && (
+          <section className="stack">
+            <div className="card">
+              <div className="card-header">
+                <h3>Bloom's Taxonomy Question Paper Generator</h3>
+                <p>Generate balanced questions aligned to cognitive levels.</p>
+              </div>
+              <div className="card-body">
+                <div className="input-row">
+                  <input
+                    placeholder="Enter topic (e.g., Operating Systems)"
+                    value={qPaperTopic}
+                    onChange={(e) => setQPaperTopic(e.target.value)}
+                  />
+                  <button className="primary" onClick={generatePaper} disabled={!qPaperTopic || isGenerating}>
+                    {isGenerating ? "Generating..." : "Generate"}
+                  </button>
+                </div>
+                {error && <p className="error">{error}</p>}
+                {generatedPaper && (
+                  <div className="output">
+                    {generatedPaper}
+                  </div>
+                )}
+              </div>
+            </div>
 
-      </Tabs>
+            <div className="card">
+              <div className="card-header">
+                <h3>Plagiarism & Originality Check</h3>
+                <p>Upload drafts and measure similarity against previous submissions.</p>
+              </div>
+              <div className="card-body">
+                <div className="placeholder">
+                  Connect to your submissions archive to enable plagiarism checks.
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {activeTab === "attendance" && (
+          <section className="stack">
+            <div className="card">
+              <div className="card-header">
+                <h3>Attendance Tracker</h3>
+                <p>Log presence, export summaries, and flag chronic absences.</p>
+              </div>
+              <div className="card-body">
+                <div className="placeholder">
+                  Attendance tracker UI goes here.
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {activeTab === "timetable" && (
+          <section className="stack">
+            <div className="card">
+              <div className="card-header">
+                <h3>Timetable Planner</h3>
+                <p>Visualize weekly slots and auto-assign available rooms.</p>
+              </div>
+              <div className="card-body">
+                <div className="placeholder">
+                  Timetable grid UI goes here.
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+      </div>
     </div>
   );
 }
