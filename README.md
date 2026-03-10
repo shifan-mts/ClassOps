@@ -1,6 +1,6 @@
 # ClassOps
 
-ClassOps is a smart teacher automation system.
+**ClassOps** is a smart teacher automation system.
 
 # 🎓 Teacher Workflow Automation Platform
 
