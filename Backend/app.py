@@ -135,6 +135,11 @@ def sync_classroom():
     courses = sync_classroom_data(session['credentials'])
     return jsonify({"message": "Classroom synced successfully", "courses": courses})
 
+@app.route('/api/courses', methods=['GET'])
+def get_courses():
+    courses = Course.query.all()
+    return jsonify([{"id": c.id, "google_course_id": c.google_course_id, "name": c.name} for c in courses])
+
 # ==========================================
 # 2. AI CONTENT DETECTION (RapidAPI)
 # ==========================================
