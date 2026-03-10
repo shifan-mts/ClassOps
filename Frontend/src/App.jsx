@@ -7,9 +7,40 @@ export default function App() {
   const [generatedPaper, setGeneratedPaper] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState("");
+  const [courses, setCourses] = useState([]);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncError, setSyncError] = useState("");
+  const [aiFile, setAiFile] = useState(null);
+  const [aiResult, setAiResult] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
+
+  const API_BASE = "http://localhost:5000";
 
   const handleGoogleSync = () => {
-    window.location.href = "http://localhost:5000/api/auth/google";
+    setSyncError("");
+    setIsSyncing(true);
+    fetch(`${API_BASE}/api/classroom/sync`, { credentials: "include" })
+      .then(async (res) => {
+        if (res.status === 401) {
+          window.location.href = `${API_BASE}/api/auth/google`;
+          return null;
+        }
+        if (!res.ok) {
+          throw new Error("Sync failed");
+        }
+        return res.json();
+      })
+      .then((data) => {
+        if (!data) return;
+        setCourses(Array.isArray(data.courses) ? data.courses : []);
+      })
+      .catch(() => {
+        setSyncError("Could not sync courses. Please try again.");
+      })
+      .finally(() => {
+        setIsSyncing(false);
+      });
   };
 
   const generatePaper = async () => {
@@ -17,21 +48,50 @@ export default function App() {
     setGeneratedPaper("");
     setIsGenerating(true);
     try {
-      const res = await fetch("http://localhost:5000/api/question-paper/generate", {
+      const res = await fetch(`${API_BASE}/api/question-paper/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ topic: qPaperTopic, difficulty: "Hard" })
       });
-      if (!res.ok) {
-        throw new Error(`Request failed with status ${res.status}`);
-      }
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || `Request failed with status ${res.status}`);
+      }
       const content = data?.question_paper || data?.questionPaper || "No question paper returned.";
       setGeneratedPaper(content);
     } catch (err) {
-      setError("Could not generate the question paper. Check the backend server and try again.");
+      setError(err?.message || "Could not generate the question paper. Check the backend server and try again.");
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const handleAiCheck = async () => {
+    setAiError("");
+    setAiResult("");
+    if (!aiFile) {
+      setAiError("Please upload a PDF or DOCX file first.");
+      return;
+    }
+    setAiLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", aiFile);
+      const res = await fetch(`${API_BASE}/api/assignments/check`, {
+        method: "POST",
+        body: formData,
+        credentials: "include"
+      });
+      const data = await res.json();
+      if (!res.ok || data?.success === false) {
+        throw new Error(data?.error || data?.message || "AI check failed");
+      }
+      const formatted = data?.formatted || data?.data || data;
+      setAiResult(typeof formatted === "string" ? formatted : JSON.stringify(formatted, null, 2));
+    } catch (err) {
+      setAiError(err?.message || "Could not analyze the file. Please try again.");
+    } finally {
+      setAiLoading(false);
     }
   };
 
@@ -43,8 +103,8 @@ export default function App() {
           <h1>EduSync OS</h1>
           <p className="subtitle">Keep syllabus targets, compliance metrics, and AI tools in one focused workspace.</p>
         </div>
-        <button className="primary" onClick={handleGoogleSync}>
-          Sync with Google Classroom
+        <button className="primary" onClick={handleGoogleSync} disabled={isSyncing}>
+          {isSyncing ? "Syncing..." : "Sync with Google Classroom"}
         </button>
       </header>
 
@@ -113,6 +173,35 @@ export default function App() {
                 <button className="primary full">Generate NBA Compliance Report</button>
               </div>
             </div>
+
+            <div className="card">
+              <div className="card-header">
+                <h3>Google Classroom Courses</h3>
+                <p>Synced courses from your connected Google Classroom account.</p>
+              </div>
+              <div className="card-body">
+                <button className="primary" onClick={handleGoogleSync} disabled={isSyncing}>
+                  {isSyncing ? "Syncing..." : "Sync Courses"}
+                </button>
+                {syncError && <p className="error">{syncError}</p>}
+                {courses.length > 0 ? (
+                  <ul className="list">
+                    {courses.map((course) => (
+                      <li key={course.id || course.google_course_id}>
+                        <span>{course.name}</span>
+                        {course.google_course_id && (
+                          <span className="status">{course.google_course_id}</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="placeholder">
+                    No courses loaded yet. Click "Sync Courses" to fetch them.
+                  </div>
+                )}
+              </div>
+            </div>
           </section>
         )}
 
@@ -146,12 +235,25 @@ export default function App() {
             <div className="card">
               <div className="card-header">
                 <h3>Plagiarism & Originality Check</h3>
-                <p>Upload drafts and measure similarity against previous submissions.</p>
+                <p>Upload a PDF or DOCX to measure AI content usage.</p>
               </div>
               <div className="card-body">
-                <div className="placeholder">
-                  Connect to your submissions archive to enable plagiarism checks.
+                <div className="file-row">
+                  <input
+                    type="file"
+                    accept=".pdf,.docx"
+                    onChange={(e) => setAiFile(e.target.files?.[0] || null)}
+                  />
+                  <button className="primary" onClick={handleAiCheck} disabled={aiLoading}>
+                    {aiLoading ? "Analyzing..." : "Analyze File"}
+                  </button>
                 </div>
+                {aiError && <p className="error">{aiError}</p>}
+                {aiResult && (
+                  <div className="output">
+                    {aiResult}
+                  </div>
+                )}
               </div>
             </div>
           </section>
