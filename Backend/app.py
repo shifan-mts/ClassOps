@@ -1,5 +1,4 @@
 import os
-import requests
 from flask import Flask, request, jsonify, redirect, url_for, session
 from flask_cors import CORS
 from flask_session import Session
@@ -21,7 +20,7 @@ app.secret_key = os.getenv('FLASK_SECRET_KEY', 'super_secret_dev_key')
 CORS(app, supports_credentials=True)
 
 # SQLite Configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///teacher_os.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///classops.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Server-side sessions to avoid oversized cookie payloads for OAuth tokens
@@ -55,14 +54,21 @@ def sync_classroom_data(credentials_dict):
     service = build('classroom', 'v1', credentials=creds)
 
     results = service.courses().list(pageSize=10).execute()
-    courses = results.get('courses', [])
+    courses_data = results.get('courses', [])
 
-    for c in courses:
+    # Ensure at least one teacher exists
+    teacher = Teacher.query.get(1)
+    if not teacher:
+        teacher = Teacher(id=1, email="admin@classops.local", name="Admin Teacher")
+        db.session.add(teacher)
+        db.session.commit()
+
+    for c in courses_data:
         if not Course.query.filter_by(google_course_id=c['id']).first():
-            new_course = Course(google_course_id=c['id'], name=c['name'], teacher_id=1) # Assuming Teacher 1
+            new_course = Course(google_course_id=c['id'], name=c['name'], teacher_id=teacher.id)
             db.session.add(new_course)
     db.session.commit()
-    return courses
+    return courses_data
 
 # ==========================================
 # 1. GOOGLE CLASSROOM INTEGRATION
@@ -203,14 +209,121 @@ def manage_targets():
 # ==========================================
 # 5. ATTENDANCE TRACKING
 # ==========================================
+@app.route('/api/attendance', methods=['GET'])
+def get_attendance():
+    course_id = request.args.get('course_id')
+    date_str = request.args.get('date', datetime.utcnow().strftime('%Y-%m-%d'))
+    
+    if not course_id:
+        return jsonify({"error": "course_id is required"}), 400
+        
+    date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+    records = Attendance.query.filter_by(course_id=course_id, date=date_obj).all()
+    
+    return jsonify({
+        "records": {r.student_id: r.status for r in records},
+        "date": date_str,
+        "course_id": course_id
+    }), 200
+
 @app.route('/api/attendance', methods=['POST'])
 def mark_attendance():
     data = request.json
+    course_id = data.get('course_id')
+    date_str = data.get('date', datetime.utcnow().strftime('%Y-%m-%d'))
+    date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+
+    if not course_id or 'records' not in data:
+        return jsonify({"error": "course_id and records are required"}), 400
+
     for record in data['records']: # List of {student_id, status}
-        att = Attendance(student_id=record['student_id'], status=record['status'])
-        db.session.add(att)
+        # Check if record already exists for this student on this date
+        existing = Attendance.query.filter_by(
+            student_id=record['student_id'], 
+            course_id=course_id, 
+            date=date_obj
+        ).first()
+        
+        if existing:
+            existing.status = record['status']
+        else:
+            att = Attendance(
+                student_id=record['student_id'], 
+                course_id=course_id, 
+                status=record['status'], 
+                date=date_obj
+            )
+            db.session.add(att)
+            
     db.session.commit()
-    return jsonify({"message": "Attendance recorded"}), 200
+    return jsonify({"message": "Attendance recorded successfully"}), 200
+
+@app.route('/api/attendance/report/<int:course_id>', methods=['GET'])
+def get_attendance_report(course_id):
+    students = Student.query.filter_by(course_id=course_id).all()
+    report = []
+    
+    for s in students:
+        total_classes = Attendance.query.filter_by(student_id=s.id, course_id=course_id).count()
+        present_count = Attendance.query.filter_by(student_id=s.id, course_id=course_id, status='Present').count()
+        
+        percentage = (present_count / total_classes * 100) if total_classes > 0 else 0
+        
+        report.append({
+            "student_id": s.id,
+            "name": s.name,
+            "roll_number": s.roll_number,
+            "total": total_classes,
+            "present": present_count,
+            "percentage": round(percentage, 2)
+        })
+        
+    return jsonify(report), 200
+
+@app.route('/api/courses/<int:course_id>/sync-students', methods=['POST'])
+def sync_students_for_course(course_id):
+    if 'credentials' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+    
+    course = Course.query.get_or_404(course_id)
+    if not course.google_course_id:
+        return jsonify({"error": "Course not linked to Google Classroom"}), 400
+
+    creds = google.oauth2.credentials.Credentials(**session['credentials'])
+    service = build('classroom', 'v1', credentials=creds)
+
+    try:
+        results = service.courses().students().list(courseId=course.google_course_id).execute()
+        students_data = results.get('students', [])
+
+        for s_data in students_data:
+            profile = s_data.get('profile', {})
+            student_id_google = profile.get('id')
+            name = profile.get('name', {}).get('fullName', 'Unknown')
+            # Check if student exists in this course
+            existing = Student.query.filter_by(roll_number=student_id_google, course_id=course.id).first()
+            if not existing:
+                new_student = Student(
+                    roll_number=student_id_google, 
+                    name=name, 
+                    course_id=course.id
+                )
+                db.session.add(new_student)
+        
+        db.session.commit()
+        return jsonify({"message": f"Synced {len(students_data)} students successfully"}), 200
+    except Exception as exc:
+        app.logger.exception("Student sync failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+@app.route('/api/courses/<int:course_id>/students', methods=['GET'])
+def get_students(course_id):
+    students = Student.query.filter_by(course_id=course_id).all()
+    return jsonify([{
+        "id": s.id,
+        "name": s.name,
+        "roll_number": s.roll_number
+    } for s in students]), 200
 
 # ==========================================
 # 6. TIMETABLE AUTOMATION (Trigger)

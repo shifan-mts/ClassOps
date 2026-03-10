@@ -151,12 +151,12 @@
 }
 
 .input-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
+  display: flex;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
-input {
+input, select {
   padding: 12px 14px;
   border-radius: 12px;
   border: 1px solid #cdd8e3;
@@ -170,6 +170,7 @@ input {
   padding: 12px 18px;
   font-weight: 600;
   cursor: pointer;
+  transition: all 0.2s ease;
 }
 
 .primary {
@@ -199,7 +200,7 @@ input {
   border-radius: 16px;
   font-family: "Courier New", Courier, monospace;
   white-space: pre-wrap;
-  max-height: 280px;
+  max-height: 480px;
   overflow-y: auto;
 }
 
@@ -209,22 +210,44 @@ input {
   border: 1px dashed #b8c5d4;
   color: #516173;
   background: #f9fbfd;
+  text-align: center;
 }
 
-.error {
-  color: #d0483d;
-  font-weight: 600;
+/* Table styles for Attendance/Report */
+.attendance-table, .report-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+}
+
+.attendance-table th, .attendance-table td, .report-table th, .report-table td {
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid #e4ecf4;
+}
+
+.status.success-bg {
+  background: #def7ec;
+  color: #03543f;
+  padding: 0.2rem 0.6rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.status.warn-bg {
+  background: #fdf2f2;
+  color: #9b1c1c;
+  padding: 0.2rem 0.6rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 700;
 }
 
 @media (max-width: 720px) {
   .tab-list {
     border-radius: 18px;
   }
-
-  .input-row {
-    grid-template-columns: 1fr;
-  }
-
   .header {
     align-items: flex-start;
   }
