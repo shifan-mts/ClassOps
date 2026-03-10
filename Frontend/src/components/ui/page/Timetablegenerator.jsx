@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const DAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri"];
@@ -23,6 +23,15 @@ function shuffle(a) {
   const b = [...a];
   for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[b[i], b[j]] = [b[j], b[i]]; }
   return b;
+}
+
+function genRandAvail() {
+  const av = {};
+  ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].forEach(d => {
+    const count = Math.floor(Math.random() * 3) + 5; // 5 to 7 slots
+    av[d] = shuffle([0, 1, 2, 3, 4, 5, 6, 7]).slice(0, count).sort((a, b) => a - b);
+  });
+  return av;
 }
 
 // ─── Scheduler: single teacher ────────────────────────────────────────────────
@@ -70,15 +79,9 @@ function runScheduler(teacher, classes) {
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 const INIT_TEACHER = {
-  name: "Mr. Sharma",
-  subjects: ["Mathematics", "Physics"],
-  available: {
-    Monday: [0, 1, 2, 3, 4, 5],
-    Tuesday: [0, 1, 2, 3],
-    Wednesday: [0, 1, 2, 3, 4, 5],
-    Thursday: [0, 1, 2, 3],
-    Friday: [0, 1, 2, 3, 4],
-  },
+  name: "Teacher Profile",
+  subjects: [],
+  available: genRandAvail(),
 };
 const INIT_CLASSES = [];
 
@@ -492,7 +495,7 @@ function TimetableView({ tt, classes, teacher, onRegenerate }) {
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
-export default function TimetableGenerator() {
+export default function TimetableGenerator({ courses = [] }) {
   const [tab, setTab] = useState("classes");
   const [teacher, setTeacher] = useState(INIT_TEACHER);
   const [classes, setClasses] = useState(INIT_CLASSES);
@@ -503,31 +506,33 @@ export default function TimetableGenerator() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const fetchCourses = async () => {
-      try {
-        const res = await fetch("http://localhost:5000/api/courses");
-        const data = await res.json();
-        if (data && Array.isArray(data)) {
-          const fetchedClasses = data.map(c => ({
-            id: c.id,
-            name: c.name,
-            requirements: []
-          }));
-          setClasses(fetchedClasses);
+    if (courses && Array.isArray(courses) && courses.length > 0) {
+      const subjects = [...new Set(courses.map(c => c.name))];
+      const fetchedClasses = courses.map(c => ({
+        id: c.id,
+        name: c.name,
+        requirements: [{ subject: c.name, hours: Math.floor(Math.random() * 3) + 2 }]
+      }));
 
-          // Optionally auto-populate teacher subjects from course names
-          const subjects = [...new Set(data.map(c => c.name))];
-          setTeacher(prev => ({
-            ...prev,
-            subjects: subjects.length > 0 ? subjects : prev.subjects
-          }));
-        }
-      } catch (err) {
-        console.error("Failed to fetch courses:", err);
-      }
-    };
-    fetchCourses();
-  }, []);
+      setClasses(fetchedClasses);
+      setTeacher(prev => ({
+        ...prev,
+        subjects: subjects,
+        available: genRandAvail()
+      }));
+
+      // Trigger generation automatically
+      setTimeout(() => {
+        setLoading(true);
+        try {
+          const localTeacher = { ...INIT_TEACHER, subjects, available: genRandAvail() };
+          const { ok, tt } = runScheduler(localTeacher, fetchedClasses);
+          if (ok) { setResult(tt); setTab("timetable"); }
+        } catch (e) { console.error(e); }
+        setLoading(false);
+      }, 100);
+    }
+  }, [courses]);
 
   function saveClass(c) {
     if (c.id && classes.find(x => x.id === c.id)) setClasses(classes.map(x => x.id === c.id ? c : x));
@@ -560,36 +565,31 @@ export default function TimetableGenerator() {
   ];
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f8fafc", fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
+    <div style={{ background: "#fff", borderRadius: 22, boxShadow: "0 20px 45px rgba(15, 25, 35, 0.08)", border: "1px solid #edf2f7", padding: "24px", fontFamily: "'Segoe UI', system-ui, sans-serif", width: "100%", boxSizing: "border-box" }}>
 
-      {/* Header */}
-      <div style={{ background: "#0f172a", padding: "18px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ width: 42, height: 42, borderRadius: 12, background: "#1e293b", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>📚</div>
-          <div>
-            <div style={{ color: "#fff", fontWeight: 800, fontSize: 18, letterSpacing: "-0.02em" }}>My Timetable Portal</div>
-            <div style={{ color: "#64748b", fontSize: 12, marginTop: 1 }}>Personal schedule planner</div>
-          </div>
+      {/* Header section substituted with a simpler one that fits App.jsx */}
+      <div style={{ padding: "0 0 20px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, borderBottom: "1.5px solid #e2e8f0", marginBottom: 20 }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#0f172a" }}>Timetable Planner</h2>
+          <p style={{ margin: "4px 0 0", fontSize: 13, color: "#64748b" }}>Manage your weekly schedule for synced courses</p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {/* Profile chip */}
-          <button onClick={() => setProfileOpen(true)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", borderRadius: 10, background: "#1e293b", border: "1.5px solid #334155", cursor: "pointer" }}>
-            <div style={{ width: 30, height: 30, borderRadius: 8, background: "#0ea5e9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>👤</div>
+          <button onClick={() => setProfileOpen(true)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 10, background: "#f1f5f9", border: "1.5px solid #e2e8f0", cursor: "pointer" }}>
             <div style={{ textAlign: "left" }}>
-              <div style={{ color: "#f1f5f9", fontWeight: 700, fontSize: 13 }}>{teacher.name}</div>
-              <div style={{ color: "#64748b", fontSize: 10 }}>{teacher.subjects.join(", ")} · {totalAvail} slots/wk</div>
+              <div style={{ color: "#0f172a", fontWeight: 700, fontSize: 12 }}>{teacher.name}</div>
+              <div style={{ color: "#64748b", fontSize: 10 }}>{teacher.subjects.length} subjects available</div>
             </div>
             <span style={{ color: "#475569", fontSize: 12, marginLeft: 2 }}>✎</span>
           </button>
           <button onClick={generate} disabled={loading}
-            style={{ padding: "10px 22px", borderRadius: 10, background: loading ? "#1e293b" : "#f59e0b", color: loading ? "#64748b" : "#0f172a", border: "none", fontWeight: 800, cursor: loading ? "not-allowed" : "pointer", fontSize: 14, transition: "all 0.2s" }}>
-            {loading ? "⏳ Generating..." : "⚡ Generate"}
+            style={{ padding: "10px 22px", borderRadius: 10, background: loading ? "#1e293b" : "#0f172a", color: "#fff", border: "none", fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", fontSize: 13 }}>
+            {loading ? "⏳..." : "⚡ Generate"}
           </button>
         </div>
       </div>
 
       {/* Tab bar + stats */}
-      <div style={{ background: "#fff", borderBottom: "1.5px solid #e2e8f0", padding: "0 28px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div style={{ background: "transparent", padding: "0 0 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", gap: 4 }}>
           {tabs.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
@@ -624,7 +624,7 @@ export default function TimetableGenerator() {
       )}
 
       {/* Content */}
-      <div style={{ padding: 28, maxWidth: 1100, margin: "0 auto" }}>
+      <div style={{ padding: "10px 0", maxWidth: "100%", margin: "0" }}>
 
         {/* CLASSES TAB */}
         {tab === "classes" && (
@@ -645,7 +645,7 @@ export default function TimetableGenerator() {
                 <div style={{ gridColumn: "1/-1", textAlign: "center", padding: "60px 20px", color: "#94a3b8" }}>
                   <div style={{ fontSize: 40, marginBottom: 10 }}>🏫</div>
                   <div style={{ fontSize: 15, fontWeight: 700, color: "#334155", marginBottom: 6 }}>No classes yet</div>
-                  <p style={{ fontSize: 13, margin: 0 }}>Click "+ Add Class" to get started</p>
+                  <p style={{ fontSize: 13, margin: 0 }}>Sync with Google Classroom in the Dashboard header to see your courses here.</p>
                 </div>
               )}
             </div>

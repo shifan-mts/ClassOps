@@ -2,6 +2,79 @@ import React, { useState, useEffect } from 'react';
 import './App.css';
 import Timetablegenerator from './components/ui/page/Timetablegenerator';
 
+function AttendanceReport({ courseId }) {
+  const [report, setReport] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (courseId) {
+      fetchReport();
+    }
+  }, [courseId]);
+
+  const fetchReport = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`http://localhost:5000/api/attendance/report/${courseId}`);
+      const data = await res.json();
+      setReport(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error("Failed to fetch report", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!courseId) return null;
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <h3>Attendance Report</h3>
+        <p>Overall percentage for all students in this subject.</p>
+      </div>
+      <div className="card-body">
+        {loading ? (
+          <p>Loading report...</p>
+        ) : report.length > 0 ? (
+          <table className="attendance-table">
+            <thead>
+              <tr>
+                <th>Roll Number</th>
+                <th>Name</th>
+                <th>Attendance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {report.map((item) => (
+                <tr key={item.student_id}>
+                  <td>{item.roll_number}</td>
+                  <td>{item.name}</td>
+                  <td>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div className="progress-bar" style={{ flex: 1, height: '8px', background: '#e2e8f0', borderRadius: '4px' }}>
+                        <div style={{
+                          width: `${item.percentage}%`,
+                          height: '100%',
+                          background: item.percentage > 75 ? '#22c55e' : item.percentage > 50 ? '#f59e0b' : '#ef4444',
+                          borderRadius: '4px'
+                        }} />
+                      </div>
+                      <span>{item.percentage}%</span>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="placeholder">No attendance records found yet.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("overview");
   const [courses, setCourses] = useState([]);
@@ -45,7 +118,7 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/courses/${courseId}/students`);
       const data = await res.json();
       setStudents(data);
-      
+
       const initial = {};
       data.forEach(s => initial[s.id] = "Present");
       setAttendanceRecords(initial);
@@ -117,14 +190,14 @@ export default function App() {
         student_id: parseInt(id),
         status
       }));
-      
+
       await fetch("http://localhost:5000/api/attendance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          course_id: parseInt(selectedCourseId), 
-          date: attendanceDate, 
-          records 
+        body: JSON.stringify({
+          course_id: parseInt(selectedCourseId),
+          date: attendanceDate,
+          records
         })
       });
       alert("Attendance saved!");
@@ -298,7 +371,7 @@ export default function App() {
               </div>
               <div className="card-body">
                 <div className="input-row">
-                  <select 
+                  <select
                     value={selectedCourseId}
                     onChange={(e) => setSelectedCourseId(e.target.value)}
                   >
@@ -317,7 +390,7 @@ export default function App() {
                   </button>
                   <button className="primary" onClick={saveAttendance}>Save Attendance</button>
                 </div>
-                
+
                 {students.length > 0 ? (
                   <table className="attendance-table">
                     <thead>
@@ -415,7 +488,7 @@ export default function App() {
 
         {activeTab === "timetable" && (
           <section className="stack">
-            <Timetablegenerator />
+            <Timetablegenerator courses={courses} />
           </section>
         )}
       </div>
