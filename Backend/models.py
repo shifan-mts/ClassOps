@@ -30,6 +30,7 @@ class Attendance(db.Model):
     date = db.Column(db.Date, nullable=False, default=datetime.utcnow)
     status = db.Column(db.String(20), nullable=False) # 'Present', 'Absent'
     student_id = db.Column(db.Integer, db.ForeignKey('student.id'), nullable=False)
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
 
 class MaterialTarget(db.Model):
     id = db.Column(db.Integer, primary_key=True)
