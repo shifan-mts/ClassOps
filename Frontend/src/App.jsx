@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import './App.css';
+import Timetablegenerator from './components/ui/page/Timetablegenerator';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("overview");
@@ -175,17 +176,7 @@ export default function App() {
 
         {activeTab === "timetable" && (
           <section className="stack">
-            <div className="card">
-              <div className="card-header">
-                <h3>Timetable Planner</h3>
-                <p>Visualize weekly slots and auto-assign available rooms.</p>
-              </div>
-              <div className="card-body">
-                <div className="placeholder">
-                  Timetable grid UI goes here.
-                </div>
-              </div>
-            </div>
+            <Timetablegenerator />
           </section>
         )}
       </div>
