@@ -68,7 +68,6 @@ def sync_classroom_data(credentials_dict=None):
     results = service.courses().list(pageSize=10).execute()
     courses_data = results.get('courses', [])
 
-<<<<<<< HEAD
     # Ensure at least one teacher exists
     teacher = Teacher.query.get(1)
     if not teacher:
@@ -79,21 +78,6 @@ def sync_classroom_data(credentials_dict=None):
     for c in courses_data:
         if not Course.query.filter_by(google_course_id=c['id']).first():
             new_course = Course(google_course_id=c['id'], name=c['name'], teacher_id=teacher.id)
-=======
-    teacher = Teacher.query.first()
-    if not teacher:
-        teacher = Teacher(name="Default Teacher", email="teacher@example.com")
-        db.session.add(teacher)
-        db.session.commit()
-
-    for c in courses:
-        if not Course.query.filter_by(google_course_id=c['id']).first():
-            new_course = Course(
-                google_course_id=c['id'],
-                name=c['name'],
-                teacher_id=teacher.id
-            )
->>>>>>> f66142c74e31787a98fba44a7917e188bf03c2bd
             db.session.add(new_course)
     db.session.commit()
     return courses_data

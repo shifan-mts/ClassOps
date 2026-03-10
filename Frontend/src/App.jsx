@@ -81,7 +81,14 @@ export default function App() {
   const [qPaperTopic, setQPaperTopic] = useState("");
   const [generatedPaper, setGeneratedPaper] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
-<<<<<<< HEAD
+  const [error, setError] = useState("");
+  const [syncError, setSyncError] = useState("");
+  const [aiFile, setAiFile] = useState(null);
+  const [aiResult, setAiResult] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
+
+  const API_BASE = "http://localhost:5000";
 
   useEffect(() => {
     fetchCourses();
@@ -89,10 +96,10 @@ export default function App() {
 
   const fetchCourses = async () => {
     try {
-      const res = await fetch("http://localhost:5000/api/courses");
+      const res = await fetch(`${API_BASE}/api/courses`);
       const data = await res.json();
-      setCourses(data);
-      if (data.length > 0 && !selectedCourseId) {
+      setCourses(Array.isArray(data) ? data : []);
+      if (Array.isArray(data) && data.length > 0 && !selectedCourseId) {
         setSelectedCourseId(data[0].id.toString());
       }
     } catch (err) {
@@ -103,7 +110,7 @@ export default function App() {
   const fetchStudents = async (courseId) => {
     if (!courseId) return;
     try {
-      const res = await fetch(`http://localhost:5000/api/courses/${courseId}/students`);
+      const res = await fetch(`${API_BASE}/api/courses/${courseId}/students`);
       const data = await res.json();
       setStudents(data);
       
@@ -119,7 +126,7 @@ export default function App() {
     if (!selectedCourseId) return;
     setIsSyncing(true);
     try {
-      const res = await fetch(`http://localhost:5000/api/courses/${selectedCourseId}/sync-students`, {
+      const res = await fetch(`${API_BASE}/api/courses/${selectedCourseId}/sync-students`, {
         method: "POST"
       });
       if (res.ok) {
@@ -135,18 +142,6 @@ export default function App() {
       setIsSyncing(false);
     }
   };
-=======
-  const [error, setError] = useState("");
-  const [courses, setCourses] = useState([]);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [syncError, setSyncError] = useState("");
-  const [aiFile, setAiFile] = useState(null);
-  const [aiResult, setAiResult] = useState("");
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiError, setAiError] = useState("");
-
-  const API_BASE = "http://localhost:5000";
->>>>>>> f66142c74e31787a98fba44a7917e188bf03c2bd
 
   const handleGoogleSync = () => {
     setSyncError("");
@@ -208,6 +203,7 @@ export default function App() {
 
   const generatePaper = async () => {
     setGeneratedPaper("");
+    setError("");
     setIsGenerating(true);
     try {
       const res = await fetch(`${API_BASE}/api/question-paper/generate`, {
@@ -216,11 +212,6 @@ export default function App() {
         body: JSON.stringify({ topic: qPaperTopic, difficulty: "Hard" })
       });
       const data = await res.json();
-<<<<<<< HEAD
-      setGeneratedPaper(data?.question_paper || "No paper returned.");
-    } catch (err) {
-      alert("Generation failed.");
-=======
       if (!res.ok) {
         throw new Error(data?.error || `Request failed with status ${res.status}`);
       }
@@ -228,7 +219,6 @@ export default function App() {
       setGeneratedPaper(content);
     } catch (err) {
       setError(err?.message || "Could not generate the question paper. Check the backend server and try again.");
->>>>>>> f66142c74e31787a98fba44a7917e188bf03c2bd
     } finally {
       setIsGenerating(false);
     }
@@ -460,10 +450,9 @@ export default function App() {
                     {generatedPaper}
                   </div>
                 )}
+                {error && <p className="error">{error}</p>}
               </div>
             </div>
-<<<<<<< HEAD
-=======
 
             <div className="card">
               <div className="card-header">
@@ -471,7 +460,7 @@ export default function App() {
                 <p>Upload a PDF or DOCX to measure AI content usage.</p>
               </div>
               <div className="card-body">
-                <div className="file-row">
+                <div className="input-row">
                   <input
                     type="file"
                     accept=".pdf,.docx"
@@ -489,23 +478,6 @@ export default function App() {
                 )}
               </div>
             </div>
-          </section>
-        )}
-
-        {activeTab === "attendance" && (
-          <section className="stack">
-            <div className="card">
-              <div className="card-header">
-                <h3>Attendance Tracker</h3>
-                <p>Log presence, export summaries, and flag chronic absences.</p>
-              </div>
-              <div className="card-body">
-                <div className="placeholder">
-                  Attendance tracker UI goes here.
-                </div>
-              </div>
-            </div>
->>>>>>> f66142c74e31787a98fba44a7917e188bf03c2bd
           </section>
         )}
 
