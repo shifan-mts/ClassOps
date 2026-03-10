@@ -7,17 +7,18 @@ from dotenv import load_dotenv
 import google.oauth2.credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
-import openai
+from openai import OpenAI
 from datetime import datetime
 from ai_checker import handle_upload, analyze_text
 
+# 1. Force HTTP for local testing (No HTTPS needed)
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+
 load_dotenv()
-if os.getenv("FLASK_ENV") != "production":
-    os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
 
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'super_secret_dev_key')
-CORS(app, supports_credentials=True)
+CORS(app, supports_credentials=True, origins=["http://localhost:5173", "http://127.0.0.1:5173"])
 
 # SQLite Configuration
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///classops.db'
@@ -40,22 +41,34 @@ db.init_app(app)
 # ==========================================
 # API KEYS (To be filled in .env file)
 # ==========================================
-OPENAI_API_KEY = os.getenv('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')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 CLIENT_SECRETS_FILE = "client_secret.json" # Download from Google Cloud Console
 SCOPES = ['https://www.googleapis.com/auth/classroom.courses.readonly', 
           'https://www.googleapis.com/auth/classroom.rosters.readonly']
+GOOGLE_REDIRECT_URI = "http://localhost:5000/api/auth/google/callback"
 
 # Initialize DB
 with app.app_context():
     db.create_all()
 
-def sync_classroom_data(credentials_dict):
+def get_classroom_service(credentials_dict=None):
+    if credentials_dict is None:
+        credentials_dict = session.get('credentials')
+    if not credentials_dict:
+        return None
     creds = google.oauth2.credentials.Credentials(**credentials_dict)
-    service = build('classroom', 'v1', credentials=creds)
+    return build('classroom', 'v1', credentials=creds)
+
+
+def sync_classroom_data(credentials_dict=None):
+    service = get_classroom_service(credentials_dict)
+    if not service:
+        raise ValueError("Missing Google credentials. Please authenticate first.")
 
     results = service.courses().list(pageSize=10).execute()
     courses_data = results.get('courses', [])
 
+<<<<<<< HEAD
     # Ensure at least one teacher exists
     teacher = Teacher.query.get(1)
     if not teacher:
@@ -66,6 +79,21 @@ def sync_classroom_data(credentials_dict):
     for c in courses_data:
         if not Course.query.filter_by(google_course_id=c['id']).first():
             new_course = Course(google_course_id=c['id'], name=c['name'], teacher_id=teacher.id)
+=======
+    teacher = Teacher.query.first()
+    if not teacher:
+        teacher = Teacher(name="Default Teacher", email="teacher@example.com")
+        db.session.add(teacher)
+        db.session.commit()
+
+    for c in courses:
+        if not Course.query.filter_by(google_course_id=c['id']).first():
+            new_course = Course(
+                google_course_id=c['id'],
+                name=c['name'],
+                teacher_id=teacher.id
+            )
+>>>>>>> f66142c74e31787a98fba44a7917e188bf03c2bd
             db.session.add(new_course)
     db.session.commit()
     return courses_data
@@ -78,7 +106,7 @@ def google_auth():
     flow = Flow.from_client_secrets_file(
         CLIENT_SECRETS_FILE, scopes=SCOPES
     )
-    flow.redirect_uri = url_for('google_auth_callback', _external=True)
+    flow.redirect_uri = GOOGLE_REDIRECT_URI
     authorization_url, state = flow.authorization_url(
         access_type='offline',
         include_granted_scopes='true',
@@ -94,7 +122,7 @@ def google_auth_url():
     flow = Flow.from_client_secrets_file(
         CLIENT_SECRETS_FILE, scopes=SCOPES
     )
-    flow.redirect_uri = url_for('google_auth_callback', _external=True)
+    flow.redirect_uri = GOOGLE_REDIRECT_URI
     authorization_url, state = flow.authorization_url(
         access_type='offline',
         include_granted_scopes='true',
@@ -115,7 +143,7 @@ def google_auth_callback():
     flow = Flow.from_client_secrets_file(
         CLIENT_SECRETS_FILE, scopes=SCOPES, state=state
     )
-    flow.redirect_uri = url_for('google_auth_callback', _external=True)
+    flow.redirect_uri = GOOGLE_REDIRECT_URI
     flow.fetch_token(authorization_response=request.url, code_verifier=code_verifier)
 
     credentials = flow.credentials
@@ -131,7 +159,7 @@ def google_auth_callback():
         sync_classroom_data(session['credentials'])
     except Exception as exc:
         app.logger.exception("Classroom sync failed: %s", exc)
-    return redirect('http://localhost:5173/dashboard') # Redirect to React App
+    return redirect('http://localhost:5173/') # Redirect to React App
 
 @app.route('/api/classroom/sync')
 def sync_classroom():
@@ -171,21 +199,31 @@ def generate_question_paper():
     data = request.json
     topic = data.get('topic')
     difficulty = data.get('difficulty', 'Medium')
-    
-    openai.api_key = OPENAI_API_KEY
+
+    if not OPENAI_API_KEY:
+        return jsonify({"error": "OpenAI API key is missing. Set OPENAI_API_KEY in .env."}), 400
+
     prompt = f"""Generate a university-level question paper on '{topic}' with a '{difficulty}' difficulty. 
     Format it strictly according to Bloom's Taxonomy:
     Part A (Remember & Understand) - 5 short questions
     Part B (Apply & Analyze) - 3 medium questions
     Part C (Evaluate & Create) - 2 essay questions"""
 
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "system", "content": "You are a university professor."},
-                  {"role": "user", "content": prompt}]
-    )
-    
-    return jsonify({"question_paper": response.choices[0].message.content})
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a university professor."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        content = ""
+        if response.choices:
+            content = response.choices[0].message.content
+        return jsonify({"question_paper": content})
+    except Exception as exc:
+        return jsonify({"error": "Failed to generate question paper.", "details": str(exc)}), 500
 
 # ==========================================
 # 4. MATERIAL TARGET COMPLETION
@@ -336,6 +374,14 @@ def generate_timetable():
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
+
+
+
+
+
+
+
+
 
 
 

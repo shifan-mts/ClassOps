@@ -252,3 +252,15 @@ input, select {
     align-items: flex-start;
   }
 }
+
+.file-row {
+  display: grid;
+  gap: 12px;
+}
+
+input[type="file"] {
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid #cdd8e3;
+  background: #ffffff;
+}
