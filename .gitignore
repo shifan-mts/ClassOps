@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+
+# Backend runtime data
+Backend/instance/
+Backend/.env
+.env
+
+# Frontend
+Frontend/node_modules/
+Frontend/dist/

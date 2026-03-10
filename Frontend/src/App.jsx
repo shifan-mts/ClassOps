@@ -1,17 +1,23 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import './App.css';
+import Timetablegenerator from './components/ui/page/Timetablegenerator';
 
-const AttendanceReport = ({ courseId }) => {
+function AttendanceReport({ courseId }) {
   const [report, setReport] = useState([]);
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    if (courseId) {
+      fetchReport();
+    }
+  }, [courseId]);
+
   const fetchReport = async () => {
-    if (!courseId) return;
     setLoading(true);
     try {
       const res = await fetch(`http://localhost:5000/api/attendance/report/${courseId}`);
       const data = await res.json();
-      setReport(data);
+      setReport(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error("Failed to fetch report", err);
     } finally {
@@ -19,56 +25,55 @@ const AttendanceReport = ({ courseId }) => {
     }
   };
 
-  useEffect(() => {
-    if (courseId) fetchReport();
-  }, [courseId]);
+  if (!courseId) return null;
 
   return (
     <div className="card">
-      <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h3>Attendance Report</h3>
-          <p>Overall percentage for each student in this subject.</p>
-        </div>
-        <button className="ghost" onClick={fetchReport} disabled={loading}>
-          {loading ? "Loading..." : "Generate Report"}
-        </button>
+      <div className="card-header">
+        <h3>Attendance Report</h3>
+        <p>Overall percentage for all students in this subject.</p>
       </div>
       <div className="card-body">
-        {report.length > 0 ? (
-          <table className="report-table">
+        {loading ? (
+          <p>Loading report...</p>
+        ) : report.length > 0 ? (
+          <table className="attendance-table">
             <thead>
               <tr>
                 <th>Roll Number</th>
                 <th>Name</th>
-                <th>Present</th>
-                <th>Total</th>
-                <th>Percentage</th>
+                <th>Attendance</th>
               </tr>
             </thead>
             <tbody>
-              {report.map((row) => (
-                <tr key={row.student_id}>
-                  <td>{row.roll_number}</td>
-                  <td>{row.name}</td>
-                  <td style={{ textAlign: 'center' }}>{row.present}</td>
-                  <td style={{ textAlign: 'center' }}>{row.total}</td>
-                  <td style={{ textAlign: 'right' }}>
-                    <span className={row.percentage < 75 ? "status warn-bg" : "status success-bg"}>
-                      {row.percentage}%
-                    </span>
+              {report.map((item) => (
+                <tr key={item.student_id}>
+                  <td>{item.roll_number}</td>
+                  <td>{item.name}</td>
+                  <td>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div className="progress-bar" style={{ flex: 1, height: '8px', background: '#e2e8f0', borderRadius: '4px' }}>
+                        <div style={{
+                          width: `${item.percentage}%`,
+                          height: '100%',
+                          background: item.percentage > 75 ? '#22c55e' : item.percentage > 50 ? '#f59e0b' : '#ef4444',
+                          borderRadius: '4px'
+                        }} />
+                      </div>
+                      <span>{item.percentage}%</span>
+                    </div>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         ) : (
-          <p className="placeholder">Click "Generate Report" to view summaries.</p>
+          <div className="placeholder">No attendance records found yet.</div>
         )}
       </div>
     </div>
   );
-};
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("overview");
@@ -83,10 +88,13 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState("");
   const [syncError, setSyncError] = useState("");
-  const [aiFile, setAiFile] = useState(null);
-  const [aiResult, setAiResult] = useState("");
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiError, setAiError] = useState("");
+  const [aiCourseId, setAiCourseId] = useState("");
+  const [courseworkItems, setCourseworkItems] = useState([]);
+  const [courseworkLoading, setCourseworkLoading] = useState(false);
+  const [selectedCourseworkId, setSelectedCourseworkId] = useState("");
+  const [plagiarismResults, setPlagiarismResults] = useState([]);
+  const [plagiarismLoading, setPlagiarismLoading] = useState(false);
+  const [plagiarismError, setPlagiarismError] = useState("");
 
   const API_BASE = "http://localhost:5000";
 
@@ -107,13 +115,85 @@ export default function App() {
     }
   };
 
+  const fetchCoursework = async (courseId) => {
+    if (!courseId) return;
+    setCourseworkLoading(true);
+    setPlagiarismError("");
+    setCourseworkItems([]);
+    setSelectedCourseworkId("");
+    try {
+      const res = await fetch(`${API_BASE}/api/classroom/courses/${courseId}/coursework`, { credentials: "include" });
+      const data = await res.json();
+      if (res.status === 403 && data?.reauth) {
+        window.location.href = `${API_BASE}/api/auth/google`;
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to load assignments");
+      }
+      const list = Array.isArray(data) ? data : [];
+      setCourseworkItems(list);
+      if (list.length > 0) {
+        setSelectedCourseworkId(list[0].id);
+      }
+    } catch (err) {
+      setPlagiarismError(err?.message || "Could not load assignments.");
+    } finally {
+      setCourseworkLoading(false);
+    }
+  };
+
+  const runPlagiarismCheck = async () => {
+    if (!aiCourseId || !selectedCourseworkId) {
+      setPlagiarismError("Select a classroom and assignment first.");
+      return;
+    }
+    setPlagiarismLoading(true);
+    setPlagiarismError("");
+    setPlagiarismResults([]);
+    try {
+      const res = await fetch(`${API_BASE}/api/classroom/courses/${aiCourseId}/coursework/${selectedCourseworkId}/plagiarism`, {
+        method: "POST",
+        credentials: "include"
+      });
+      const data = await res.json();
+      if (res.status === 403 && data?.reauth) {
+        window.location.href = `${API_BASE}/api/auth/google`;
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(data?.error || "Plagiarism check failed.");
+      }
+      setPlagiarismResults(Array.isArray(data?.results) ? data.results : []);
+    } catch (err) {
+      setPlagiarismError(err?.message || "Plagiarism check failed.");
+    } finally {
+      setPlagiarismLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (courses.length > 0 && !aiCourseId) {
+      setAiCourseId(courses[0].id.toString());
+    }
+  }, [courses]);
+
+  useEffect(() => {
+    if (aiCourseId) {
+      fetchCoursework(aiCourseId);
+    } else {
+      setCourseworkItems([]);
+      setSelectedCourseworkId("");
+    }
+  }, [aiCourseId]);
+
   const fetchStudents = async (courseId) => {
     if (!courseId) return;
     try {
       const res = await fetch(`${API_BASE}/api/courses/${courseId}/students`, { credentials: "include" });
       const data = await res.json();
       setStudents(data);
-      
+
       const initial = {};
       data.forEach(s => initial[s.id] = "Present");
       setAttendanceRecords(initial);
@@ -217,6 +297,10 @@ export default function App() {
   };
 
   const generatePaper = async () => {
+    if (!aiCourseId) {
+      setError("Select a classroom before generating a question paper.");
+      return;
+    }
     setGeneratedPaper("");
     setError("");
     setIsGenerating(true);
@@ -224,7 +308,7 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/question-paper/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic: qPaperTopic, difficulty: "Hard" })
+        body: JSON.stringify({ topic: qPaperTopic, difficulty: "Hard", course_id: aiCourseId ? parseInt(aiCourseId) : null })
       });
       const data = await res.json();
       if (!res.ok) {
@@ -239,34 +323,6 @@ export default function App() {
     }
   };
 
-  const handleAiCheck = async () => {
-    setAiError("");
-    setAiResult("");
-    if (!aiFile) {
-      setAiError("Please upload a PDF or DOCX file first.");
-      return;
-    }
-    setAiLoading(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", aiFile);
-      const res = await fetch(`${API_BASE}/api/assignments/check`, {
-        method: "POST",
-        body: formData,
-        credentials: "include"
-      });
-      const data = await res.json();
-      if (!res.ok || data?.success === false) {
-        throw new Error(data?.error || data?.message || "AI check failed");
-      }
-      const formatted = data?.formatted || data?.data || data;
-      setAiResult(typeof formatted === "string" ? formatted : JSON.stringify(formatted, null, 2));
-    } catch (err) {
-      setAiError(err?.message || "Could not analyze the file. Please try again.");
-    } finally {
-      setAiLoading(false);
-    }
-  };
 
   return (
     <div className="app">
@@ -381,7 +437,7 @@ export default function App() {
               </div>
               <div className="card-body">
                 <div className="input-row">
-                  <select 
+                  <select
                     value={selectedCourseId}
                     onChange={(e) => setSelectedCourseId(e.target.value)}
                   >
@@ -400,7 +456,7 @@ export default function App() {
                   </button>
                   <button className="primary" onClick={saveAttendance}>Save Attendance</button>
                 </div>
-                
+
                 {students.length > 0 ? (
                   <table className="attendance-table">
                     <thead>
@@ -445,6 +501,29 @@ export default function App() {
           <section className="stack">
             <div className="card">
               <div className="card-header">
+                <h3>Choose Classroom</h3>
+                <p>Select the classroom to power the AI tools below.</p>
+              </div>
+              <div className="card-body">
+                <div className="input-row">
+                  <select
+                    value={aiCourseId}
+                    onChange={(e) => setAiCourseId(e.target.value)}
+                  >
+                    <option value="">Select Classroom</option>
+                    {courses.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+                {courses.length === 0 && (
+                  <div className="placeholder">No courses loaded yet. Sync courses first.</div>
+                )}
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="card-header">
                 <h3>Bloom's Taxonomy Question Paper Generator</h3>
                 <p>Generate balanced questions aligned to cognitive levels.</p>
               </div>
@@ -455,11 +534,19 @@ export default function App() {
                     placeholder="Enter topic (e.g., Operating Systems)"
                     value={qPaperTopic}
                     onChange={(e) => setQPaperTopic(e.target.value)}
+                    disabled={!aiCourseId}
                   />
-                  <button className="primary" onClick={generatePaper} disabled={!qPaperTopic || isGenerating}>
+                  <button
+                    className="primary"
+                    onClick={generatePaper}
+                    disabled={!aiCourseId || !qPaperTopic || isGenerating}
+                  >
                     {isGenerating ? "Generating..." : "Generate"}
                   </button>
                 </div>
+                {!aiCourseId && (
+                  <p className="error">Select a classroom first.</p>
+                )}
                 {generatedPaper && (
                   <div className="output">
                     {generatedPaper}
@@ -472,49 +559,73 @@ export default function App() {
             <div className="card">
               <div className="card-header">
                 <h3>Plagiarism & Originality Check</h3>
-                <p>Upload a PDF or DOCX to measure AI content usage.</p>
+                <p>Analyze turned-in submissions from Google Classroom.</p>
               </div>
               <div className="card-body">
                 <div className="input-row">
-                  <input
-                    type="file"
-                    accept=".pdf,.docx"
-                    onChange={(e) => setAiFile(e.target.files?.[0] || null)}
-                  />
-                  <button className="primary" onClick={handleAiCheck} disabled={aiLoading}>
-                    {aiLoading ? "Analyzing..." : "Analyze File"}
+                  <select
+                    value={selectedCourseworkId}
+                    onChange={(e) => setSelectedCourseworkId(e.target.value)}
+                    disabled={!aiCourseId || courseworkLoading}
+                  >
+                    <option value="">Select Assignment</option>
+                    {courseworkItems.map((item) => (
+                      <option key={item.id} value={item.id}>{item.title}</option>
+                    ))}
+                  </select>
+                  <button
+                    className="primary"
+                    onClick={runPlagiarismCheck}
+                    disabled={!aiCourseId || !selectedCourseworkId || plagiarismLoading}
+                  >
+                    {plagiarismLoading ? "Analyzing..." : "Check Submissions"}
                   </button>
                 </div>
-                {aiError && <p className="error">{aiError}</p>}
-                {aiResult && (
-                  <div className="output">
-                    {aiResult}
-                  </div>
+                {courseworkLoading && <p>Loading assignments...</p>}
+                {plagiarismError && <p className="error">{plagiarismError}</p>}
+                {plagiarismResults.length > 0 ? (
+                  <table className="attendance-table">
+                    <thead>
+                      <tr>
+                        <th>Student</th>
+                        <th style={{ textAlign: 'right' }}>AI %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {plagiarismResults.map((row) => (
+                        <tr key={row.student_id}>
+                          <td>{row.student_name}</td>
+                          <td style={{ textAlign: 'right' }}>
+                            {row.percentage === null || row.percentage === undefined ? "N/A" : `${row.percentage}%`}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="placeholder">Select a classroom and assignment to run the check.</div>
                 )}
               </div>
             </div>
           </section>
         )}
-
         {activeTab === "timetable" && (
           <section className="stack">
-            <div className="card">
-              <div className="card-header">
-                <h3>Timetable Planner</h3>
-                <p>Visualize weekly slots and auto-assign available rooms.</p>
-              </div>
-              <div className="card-body">
-                <div className="placeholder">
-                  Timetable grid UI goes here. (Work in Progress)
-                </div>
-              </div>
-            </div>
+            <Timetablegenerator courses={courses} />
           </section>
         )}
       </div>
     </div>
   );
 }
+
+
+
+
+
+
+
+
 
 
 

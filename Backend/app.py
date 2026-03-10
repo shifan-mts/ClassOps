@@ -1,12 +1,14 @@
-import os
+﻿import os
 from flask import Flask, request, jsonify, redirect, url_for, session
 from flask_cors import CORS
 from flask_session import Session
-from models import db, Teacher, Course, Student, Attendance, MaterialTarget, StudentMetric
+from models import db, Teacher, Course, Student, Attendance, MaterialTarget, StudentMetric, QuestionPaper
 from dotenv import load_dotenv
 import google.oauth2.credentials
+import io
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 from google.auth.transport.requests import Request
 from openai import OpenAI
 from sqlalchemy import text
@@ -16,7 +18,12 @@ from ai_checker import handle_upload, analyze_text
 # 1. Force HTTP for local testing (No HTTPS needed)
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
+def _clean_env(value):
+    if value is None:
+        return None
+    return value.strip().strip('"').strip("'")
 
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'super_secret_dev_key')
@@ -43,7 +50,7 @@ db.init_app(app)
 # ==========================================
 # API KEYS (To be filled in .env file)
 # ==========================================
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+OPENAI_API_KEY = _clean_env(os.getenv('OPENAI_API_KEY'))
 CLIENT_SECRETS_FILE = "client_secret.json" # Download from Google Cloud Console
 SCOPES = ['https://www.googleapis.com/auth/classroom.courses.readonly', 
           'https://www.googleapis.com/auth/classroom.rosters.readonly']
@@ -88,6 +95,50 @@ def get_classroom_service(credentials_dict=None):
     if not creds:
         return None
     return build('classroom', 'v1', credentials=creds)
+
+def get_drive_service(credentials_dict=None):
+    creds = _build_credentials(credentials_dict)
+    if not creds:
+        return None
+    return build('drive', 'v3', credentials=creds)
+
+
+def _missing_scopes(creds):
+    creds_scopes = set(creds.scopes or [])
+    return [s for s in SCOPES if s not in creds_scopes]
+
+
+def _download_drive_file(drive_service, file_id):
+    try:
+        meta = drive_service.files().get(fileId=file_id, fields="id,name,mimeType").execute()
+        mime_type = meta.get('mimeType')
+        name = meta.get('name') or 'submission'
+
+        if mime_type and mime_type.startswith('application/vnd.google-apps.'):
+            if mime_type == 'application/vnd.google-apps.document':
+                export_mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                filename = f"{name}.docx"
+            else:
+                export_mime = 'application/pdf'
+                filename = f"{name}.pdf"
+            request = drive_service.files().export_media(fileId=file_id, mimeType=export_mime)
+        else:
+            request = drive_service.files().get_media(fileId=file_id)
+            filename = name
+            if not os.path.splitext(filename)[1]:
+                if mime_type == 'application/pdf':
+                    filename += '.pdf'
+                elif mime_type in ('application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword'):
+                    filename += '.docx'
+
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        return fh.getvalue(), filename, None
+    except Exception as exc:
+        return None, None, str(exc)
 
 def sync_classroom_data(credentials_dict=None):
     service = get_classroom_service(credentials_dict)
@@ -195,6 +246,155 @@ def list_courses():
     return jsonify([serialize_course(c) for c in courses]), 200
 
 # ==========================================
+# Classroom Coursework & Submissions
+# ==========================================
+@app.route('/api/classroom/courses/<int:course_id>/coursework', methods=['GET'])
+def list_coursework(course_id):
+    if 'credentials' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    course = Course.query.get(course_id)
+    if not course:
+        course = Course.query.filter_by(google_course_id=str(course_id)).first()
+    if not course or not course.google_course_id:
+        return jsonify({"error": "Course not linked to Google Classroom"}), 400
+
+    creds = _build_credentials()
+    if not creds:
+        return jsonify({"error": "Not authenticated"}), 401
+    missing = _missing_scopes(creds)
+    if missing:
+        return jsonify({"error": "Missing Google Classroom/Drive permissions. Please re-auth.", "reauth": True}), 403
+
+    service = get_classroom_service()
+    if not service:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    try:
+        items = []
+        page_token = None
+        while True:
+            resp = service.courses().courseWork().list(
+                courseId=course.google_course_id,
+                pageToken=page_token,
+                pageSize=50
+            ).execute()
+            items.extend(resp.get('courseWork', []))
+            page_token = resp.get('nextPageToken')
+            if not page_token:
+                break
+
+        payload = [
+            {
+                "id": item.get('id'),
+                "title": item.get('title'),
+                "state": item.get('state'),
+                "maxPoints": item.get('maxPoints'),
+                "dueDate": item.get('dueDate')
+            }
+            for item in items
+        ]
+        return jsonify(payload), 200
+    except Exception as exc:
+        app.logger.exception("Failed to list coursework: %s", exc)
+        return jsonify({"error": "Failed to load assignments"}), 500
+
+
+@app.route('/api/classroom/courses/<int:course_id>/coursework/<coursework_id>/plagiarism', methods=['POST'])
+def analyze_coursework_plagiarism(course_id, coursework_id):
+    if 'credentials' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    course = Course.query.get(course_id)
+    if not course:
+        course = Course.query.filter_by(google_course_id=str(course_id)).first()
+    if not course or not course.google_course_id:
+        return jsonify({"error": "Course not linked to Google Classroom"}), 400
+
+    creds = _build_credentials()
+    if not creds:
+        return jsonify({"error": "Not authenticated"}), 401
+    missing = _missing_scopes(creds)
+    if missing:
+        return jsonify({"error": "Missing Google Classroom/Drive permissions. Please re-auth.", "reauth": True}), 403
+
+    classroom = get_classroom_service()
+    drive = get_drive_service()
+    if not classroom or not drive:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    try:
+        submissions = []
+        page_token = None
+        while True:
+            resp = classroom.courses().courseWork().studentSubmissions().list(
+                courseId=course.google_course_id,
+                courseWorkId=coursework_id,
+                pageToken=page_token,
+                pageSize=50
+            ).execute()
+            submissions.extend(resp.get('studentSubmissions', []))
+            page_token = resp.get('nextPageToken')
+            if not page_token:
+                break
+
+        results = []
+        for sub in submissions:
+            if sub.get('state') not in ('TURNED_IN', 'RETURNED'):
+                continue
+
+            attachments = sub.get('assignmentSubmission', {}).get('attachments', [])
+            percent_values = []
+            analyzed_files = 0
+            skipped_files = 0
+
+            for att in attachments:
+                drive_file = att.get('driveFile')
+                if not drive_file:
+                    skipped_files += 1
+                    continue
+
+                file_id = drive_file.get('id') or drive_file.get('driveFile', {}).get('id')
+                if not file_id:
+                    skipped_files += 1
+                    continue
+
+                file_bytes, filename, err = _download_drive_file(drive, file_id)
+                if not file_bytes:
+                    skipped_files += 1
+                    continue
+
+                analyzed_files += 1
+                analysis = handle_upload(file_bytes, filename)
+                data = analysis.get('data', {})
+                percentage = data.get('percentage')
+                try:
+                    if percentage is not None:
+                        percent_values.append(float(percentage))
+                except Exception:
+                    pass
+
+                # limit to first supported file per submission
+                break
+
+            user_id = sub.get('userId')
+            student = Student.query.filter_by(roll_number=str(user_id), course_id=course.id).first()
+            student_name = student.name if student else str(user_id)
+
+            results.append({
+                "student_id": user_id,
+                "student_name": student_name,
+                "percentage": max(percent_values) if percent_values else None,
+                "status": sub.get('state'),
+                "analyzed_files": analyzed_files,
+                "skipped_files": skipped_files
+            })
+
+        return jsonify({"results": results, "total": len(results)}), 200
+    except Exception as exc:
+        app.logger.exception("Plagiarism check failed: %s", exc)
+        return jsonify({"error": "Failed to analyze submissions"}), 500
+# ==========================================
 # 2. AI CONTENT DETECTION (RapidAPI)
 # ==========================================
 @app.route('/api/assignments/check', methods=['POST'])
@@ -202,53 +402,118 @@ def check_plagiarism():
     if 'file' in request.files:
         file = request.files['file']
         if not file or not file.filename:
-            return jsonify({"error": "No file uploaded"}), 400
+            return jsonify({"success": False, "error": "No file uploaded"}), 400
         result = handle_upload(file)
-        status_code = 200 if result.get("success") else 500
-        return jsonify(result), status_code
+        return jsonify(result), 200
 
     data = request.get_json(silent=True) or {}
     text_to_check = data.get('text')
     if text_to_check:
         result = analyze_text(text_to_check)
-        status_code = 200 if result.get("success") else 500
-        return jsonify(result), status_code
+        return jsonify(result), 200
 
-    return jsonify({"error": "Provide a file upload or a text field."}), 400
+    return jsonify({"success": False, "error": "Provide a file upload or a text field."}), 400
 
 # ==========================================
 # 3. QUESTION PAPER CREATION (BLOOM'S TAXONOMY)
 # ==========================================
+
+def _build_bloom_template(topic, difficulty, syllabus_items=None):
+    syllabus_items = syllabus_items or []
+    header = [
+        f"Question Paper: {topic}",
+        f"Difficulty: {difficulty}",
+    ]
+    if syllabus_items:
+        header.append("Syllabus Targets: " + ", ".join(syllabus_items))
+
+    lines = header + [
+        "",
+        "Part A (Remember & Understand) - 5 short questions",
+        f"1. Define the core concepts of {topic}.",
+        f"2. List key components or terminology used in {topic}.",
+        f"3. Explain the basic workflow or life cycle in {topic}.",
+        f"4. Give two real-world examples where {topic} is applied.",
+        f"5. Compare two foundational approaches within {topic}.",
+        "",
+        "Part B (Apply & Analyze) - 3 medium questions",
+        f"6. Apply {topic} principles to solve a practical scenario of your choice.",
+        f"7. Analyze a case study and identify strengths and weaknesses related to {topic}.",
+        f"8. Solve a problem by selecting appropriate methods from {topic} and justify your choice.",
+        "",
+        "Part C (Evaluate & Create) - 2 essay questions",
+        f"9. Evaluate modern trends in {topic} and argue their impact on industry.",
+        f"10. Propose an improved system or model using {topic} concepts, including design rationale.",
+    ]
+    return "\n".join(lines)
+
+
+def _generate_question_paper_content(topic, difficulty, syllabus_items=None):
+    if OPENAI_API_KEY:
+        prompt_parts = [
+            f"Generate a university-level question paper on '{topic}' with a '{difficulty}' difficulty.",
+            "Format it strictly according to Bloom's Taxonomy:",
+            "Part A (Remember & Understand) - 5 short questions",
+            "Part B (Apply & Analyze) - 3 medium questions",
+            "Part C (Evaluate & Create) - 2 essay questions",
+        ]
+        if syllabus_items:
+            prompt_parts.append("Align questions to these syllabus targets: " + ", ".join(syllabus_items))
+        prompt = "\n".join(prompt_parts)
+
+        try:
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You are a university professor."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            if response.choices:
+                content = response.choices[0].message.content
+                if content:
+                    return content, "openai"
+        except Exception as exc:
+            app.logger.exception("Question paper generation failed: %s", exc)
+
+    return _build_bloom_template(topic, difficulty, syllabus_items), "template"
+
+
 @app.route('/api/question-paper/generate', methods=['POST'])
 def generate_question_paper():
-    data = request.json
-    topic = data.get('topic')
-    difficulty = data.get('difficulty', 'Medium')
+    data = request.get_json(silent=True) or {}
+    topic = (data.get('topic') or "").strip()
+    difficulty = (data.get('difficulty') or 'Medium').strip()
+    course_id = data.get('course_id')
+    use_cache = data.get('use_cache', True)
 
-    if not OPENAI_API_KEY:
-        return jsonify({"error": "OpenAI API key is missing. Set OPENAI_API_KEY in .env."}), 400
+    if not topic:
+        return jsonify({"question_paper": "Please provide a topic to generate a question paper."}), 200
 
-    prompt = f"""Generate a university-level question paper on '{topic}' with a '{difficulty}' difficulty. 
-    Format it strictly according to Bloom's Taxonomy:
-    Part A (Remember & Understand) - 5 short questions
-    Part B (Apply & Analyze) - 3 medium questions
-    Part C (Evaluate & Create) - 2 essay questions"""
+    if use_cache:
+        cached = QuestionPaper.query.filter_by(topic=topic, difficulty=difficulty).order_by(QuestionPaper.created_at.desc()).first()
+        if cached:
+            return jsonify({"question_paper": cached.content, "source": "cache", "id": cached.id}), 200
+
+    syllabus_items = []
+    if course_id:
+        targets = MaterialTarget.query.filter_by(course_id=course_id).order_by(MaterialTarget.target_date.asc()).all()
+        syllabus_items = [t.topic for t in targets]
+
+    content, source = _generate_question_paper_content(topic, difficulty, syllabus_items)
 
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a university professor."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        content = ""
-        if response.choices:
-            content = response.choices[0].message.content
-        return jsonify({"question_paper": content})
+        qp = QuestionPaper(topic=topic, difficulty=difficulty, content=content)
+        db.session.add(qp)
+        db.session.commit()
+        qp_id = qp.id
     except Exception as exc:
-        return jsonify({"error": "Failed to generate question paper.", "details": str(exc)}), 500
+        db.session.rollback()
+        app.logger.exception("Failed to save question paper: %s", exc)
+        qp_id = None
+
+    return jsonify({"question_paper": content, "source": source, "id": qp_id}), 200
 
 # ==========================================
 # 4. MATERIAL TARGET COMPLETION
@@ -419,6 +684,17 @@ def generate_timetable():
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
+
+
+
+
+
+
+
+
+
+
+
 
 
 
