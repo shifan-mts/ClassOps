@@ -7,3 +7,10 @@ google-auth-oauthlib
 requests
 python-dotenv
 openai
+langsmith
+langchain
+langchain-community
+unstructured
+pypdf
+python-docx
+flask-session
