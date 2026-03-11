@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const DAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 const PERIODS = ["8–9 AM", "9–10 AM", "10–11 AM", "11–12 PM", "12–1 PM", "1–2 PM", "2–3 PM", "3–4 PM"];
+const API_BASE = "http://localhost:5000";
 
 const PALETTES = [
   { bg: "#dbeafe", border: "#3b82f6", text: "#1e3a8a" },
@@ -19,74 +20,13 @@ const PALETTES = [
 const colCache = {}; let colIdx = 0;
 function sc(s) { if (!colCache[s]) colCache[s] = PALETTES[colIdx++ % PALETTES.length]; return colCache[s]; }
 
-function shuffle(a) {
-  const b = [...a];
-  for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[b[i], b[j]] = [b[j], b[i]]; }
-  return b;
-}
-
-function genRandAvail() {
-  const av = {};
-  ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].forEach(d => {
-    const count = Math.floor(Math.random() * 3) + 5; // 5 to 7 slots
-    av[d] = shuffle([0, 1, 2, 3, 4, 5, 6, 7]).slice(0, count).sort((a, b) => a - b);
-  });
-  return av;
-}
-
-// ─── Scheduler: single teacher ────────────────────────────────────────────────
-function runScheduler(teacher, classes) {
-  let tasks = [];
-  for (const c of classes)
-    for (const r of c.requirements)
-      for (let h = 0; h < r.hours; h++)
-        tasks.push({ cid: c.id, sub: r.subject });
-  tasks = shuffle(tasks);
-
-  const tt = {};
-  for (const c of classes) { tt[c.id] = {}; for (const d of DAYS) tt[c.id][d] = {}; }
-
-  const busy = {};
-  for (const d of DAYS) busy[d] = new Set();
-
-  const deadline = Date.now() + 6000;
-
-  function solve(i) {
-    if (Date.now() > deadline) return false;
-    if (i === tasks.length) return true;
-    const { cid, sub } = tasks[i];
-
-    if (!teacher.subjects.includes(sub)) return false;
-
-    for (const day of shuffle(DAYS)) {
-      for (let p = 0; p < PERIODS.length; p++) {
-        if (tt[cid][day][p]) continue;
-        if (busy[day].has(p)) continue;
-        if (!(teacher.available[day] || []).includes(p)) continue;
-
-        tt[cid][day][p] = { sub, className: classes.find(c => c.id === cid)?.name || "" };
-        busy[day].add(p);
-        if (solve(i + 1)) return true;
-        delete tt[cid][day][p];
-        busy[day].delete(p);
-      }
-    }
-    return false;
-  }
-
-  return { ok: solve(0), tt };
-}
-
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 const INIT_TEACHER = {
   name: "Teacher Profile",
   subjects: [],
-  available: genRandAvail(),
+  available: { Monday: [], Tuesday: [], Wednesday: [], Thursday: [], Friday: [] },
 };
 const INIT_CLASSES = [];
-
-let uid = 300;
-const nid = () => ++uid;
 
 // ─── Shared styles ─────────────────────────────────────────────────────────────
 const labelStyle = { display: "block", marginBottom: 4, fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" };
@@ -149,20 +89,16 @@ function AvailGrid({ available, onChange }) {
 // ─── Profile Modal ────────────────────────────────────────────────────────────
 function ProfileModal({ teacher, onSave, onClose }) {
   const [name, setName] = useState(teacher.name || "");
-  const [subjects, setSubjects] = useState(teacher.subjects || []);
-  const [subInput, setSubInput] = useState("");
-  const [available, setAvailable] = useState(teacher.available || { Monday: [], Tuesday: [], Wednesday: [], Thursday: [], Friday: [] });
+  const [courses, setCourses] = useState(teacher.courses || []);
+  const [available, setAvailable] = useState(teacher.availability || { Monday: [], Tuesday: [], Wednesday: [], Thursday: [], Friday: [] });
 
-  function addSub() {
-    const s = subInput.trim();
-    if (s && !subjects.includes(s)) setSubjects([...subjects, s]);
-    setSubInput("");
+  function updateHours(id, h) {
+    setCourses(courses.map(c => c.id === id ? { ...c, hours: parseInt(h) || 1 } : c));
   }
-  function removeSub(s) { setSubjects(subjects.filter(x => x !== s)); }
+
   function save() {
     if (!name.trim()) { alert("Enter your name"); return; }
-    if (subjects.length === 0) { alert("Add at least one subject you teach"); return; }
-    onSave({ name: name.trim(), subjects, available });
+    onSave({ name: name.trim(), availability: available, courses: courses });
   }
 
   return (
@@ -177,24 +113,17 @@ function ProfileModal({ teacher, onSave, onClose }) {
         <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Mr. Sharma"
           style={{ ...inputStyle, marginBottom: 18 }} />
 
-        <label style={labelStyle}>Subjects I Teach</label>
-        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-          <input value={subInput} onChange={e => setSubInput(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addSub(); } }}
-            placeholder="Type subject & press Enter"
-            style={{ ...inputStyle, flex: 1, marginBottom: 0 }} />
-          <button onClick={addSub} style={btnPrimary}>Add</button>
-        </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 22, minHeight: 32 }}>
-          {subjects.map(s => {
-            const c = sc(s); return (
-              <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 10px", borderRadius: 20, border: `1.5px solid ${c.border}`, background: c.bg, color: c.text, fontSize: 12, fontWeight: 600 }}>
-                {s}
-                <button onClick={() => removeSub(s)} style={{ background: "none", border: "none", color: c.text, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
-              </span>
-            );
-          })}
-          {subjects.length === 0 && <span style={{ color: "#94a3b8", fontSize: 12 }}>No subjects added yet</span>}
+        <label style={labelStyle}>Subject Hour Requirements</label>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 22 }}>
+            {courses.map(c => (
+                <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 10, border: "1.5px solid #e2e8f0", background: "#f8fafc" }}>
+                    <span style={{ flex: 1, fontWeight: 700, color: "#334155", fontSize: 13 }}>{c.name}</span>
+                    <input type="number" value={c.hours} onChange={e => updateHours(c.id, e.target.value)} min={1} max={10}
+                        style={{ width: 40, padding: "3px 6px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", fontSize: 12, textAlign: "center", fontWeight: 700 }} />
+                    <span style={{ fontSize: 11, color: "#64748b" }}>hrs/wk</span>
+                </div>
+            ))}
+            {courses.length === 0 && <p style={{ color: "#94a3b8", fontSize: 12 }}>Sync courses from Classroom to set requirements.</p>}
         </div>
 
         <label style={labelStyle}>My Weekly Availability</label>
@@ -210,105 +139,21 @@ function ProfileModal({ teacher, onSave, onClose }) {
   );
 }
 
-// ─── Class Modal ──────────────────────────────────────────────────────────────
-function ClassModal({ cls, teacherSubjects, onSave, onClose }) {
-  const [name, setName] = useState(cls.name || "");
-  const [reqs, setReqs] = useState(cls.requirements || []);
-  const [subInput, setSubInput] = useState(teacherSubjects[0] || "");
-  const [hoursInput, setHoursInput] = useState(3);
-
-  function addReq() {
-    const s = subInput.trim();
-    if (!s) { alert("Select or enter a subject"); return; }
-    if (reqs.find(r => r.subject === s)) { alert("Already added"); return; }
-    setReqs([...reqs, { subject: s, hours: parseInt(hoursInput) || 1 }]);
-    setSubInput(teacherSubjects[0] || ""); setHoursInput(3);
-  }
-  function removeReq(s) { setReqs(reqs.filter(r => r.subject !== s)); }
-  function updateHours(s, h) { setReqs(reqs.map(r => r.subject === s ? { ...r, hours: parseInt(h) || 1 } : r)); }
-  function save() {
-    if (!name.trim()) { alert("Enter class name"); return; }
-    if (reqs.length === 0) { alert("Add at least one subject requirement"); return; }
-    onSave({ ...cls, name: name.trim(), requirements: reqs });
-  }
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-      <div style={{ background: "#fff", borderRadius: 18, padding: 28, width: "100%", maxWidth: 500, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 30px 70px rgba(0,0,0,0.25)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
-          <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#0f172a" }}>{cls.id ? "Edit Class" : "Add Class"}</h3>
-          <button onClick={onClose} style={{ background: "#f1f5f9", border: "none", borderRadius: 8, width: 32, height: 32, cursor: "pointer", fontSize: 16, color: "#64748b" }}>×</button>
-        </div>
-
-        <label style={labelStyle}>Class Name</label>
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Class 10-A"
-          style={{ ...inputStyle, marginBottom: 20 }} />
-
-        <label style={labelStyle}>Subject Requirements</label>
-        <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
-          {teacherSubjects.length > 0 ? (
-            <select value={subInput} onChange={e => setSubInput(e.target.value)}
-              style={{ flex: 1, padding: "9px 12px", borderRadius: 8, border: "1.5px solid #e2e8f0", fontSize: 13, outline: "none", background: "#fff" }}>
-              {teacherSubjects.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          ) : (
-            <input value={subInput} onChange={e => setSubInput(e.target.value)} placeholder="Subject"
-              style={{ ...inputStyle, flex: 1, marginBottom: 0 }} />
-          )}
-          <input type="number" value={hoursInput} onChange={e => setHoursInput(e.target.value)} min={1} max={8}
-            style={{ width: 52, padding: "8px 8px", borderRadius: 8, border: "1.5px solid #e2e8f0", fontSize: 13, outline: "none", textAlign: "center" }} />
-          <span style={{ fontSize: 11, color: "#94a3b8", whiteSpace: "nowrap" }}>hrs/wk</span>
-          <button onClick={addReq} style={btnPrimary}>Add</button>
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 22 }}>
-          {reqs.map(r => {
-            const c = sc(r.subject); return (
-              <div key={r.subject} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 10, border: `1.5px solid ${c.border}`, background: c.bg }}>
-                <span style={{ flex: 1, fontWeight: 700, color: c.text, fontSize: 13 }}>{r.subject}</span>
-                <input type="number" value={r.hours} onChange={e => updateHours(r.subject, e.target.value)} min={1} max={8}
-                  style={{ width: 40, padding: "3px 6px", borderRadius: 6, border: `1px solid ${c.border}`, background: "rgba(255,255,255,0.7)", fontSize: 12, textAlign: "center", fontWeight: 700, color: c.text }} />
-                <span style={{ fontSize: 11, color: c.text }}>hrs/wk</span>
-                <button onClick={() => removeReq(r.subject)} style={{ background: "none", border: "none", color: c.text, cursor: "pointer", fontSize: 18, fontWeight: 700, lineHeight: 1 }}>×</button>
-              </div>
-            );
-          })}
-          {reqs.length === 0 && <p style={{ color: "#94a3b8", fontSize: 13, textAlign: "center", padding: "12px 0", margin: 0 }}>No subjects added yet</p>}
-        </div>
-
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          <button onClick={onClose} style={btnSecondary}>Cancel</button>
-          <button onClick={save} style={{ ...btnPrimary, background: "#0f172a", padding: "9px 24px", fontSize: 13 }}>Save Class</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Class Card ───────────────────────────────────────────────────────────────
-function ClassCard({ cls, onEdit, onDelete }) {
-  const total = cls.requirements.reduce((s, r) => s + r.hours, 0);
+function ClassCard({ cls }) {
   return (
     <div style={{ background: "#fff", borderRadius: 14, padding: 18, border: "1.5px solid #e2e8f0", boxShadow: "0 1px 6px rgba(0,0,0,0.04)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
         <div>
           <div style={{ fontWeight: 700, color: "#0f172a", fontSize: 15 }}>{cls.name}</div>
-          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>{total} periods/week · {cls.requirements.length} subject{cls.requirements.length !== 1 ? "s" : ""}</div>
-        </div>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button onClick={() => onEdit(cls)} style={btnSmall}>Edit</button>
-          <button onClick={() => onDelete(cls.id)} style={{ ...btnSmall, background: "#fff1f2", borderColor: "#fecaca", color: "#dc2626" }}>Del</button>
+          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>{cls.hours} periods/week required</div>
         </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {cls.requirements.map(r => {
-          const c = sc(r.subject); return (
-            <div key={r.subject} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 10px", borderRadius: 8, border: `1.5px solid ${c.border}`, background: c.bg }}>
-              <span style={{ flex: 1, fontWeight: 700, color: c.text, fontSize: 12 }}>{r.subject}</span>
-              <span style={{ fontSize: 11, color: c.text, background: "rgba(255,255,255,0.6)", padding: "1px 8px", borderRadius: 10, fontWeight: 700 }}>{r.hours} hrs/wk</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 10px", borderRadius: 8, border: `1.5px solid ${sc(cls.name).border}`, background: sc(cls.name).bg }}>
+              <span style={{ flex: 1, fontWeight: 700, color: sc(cls.name).text, fontSize: 12 }}>{cls.name}</span>
+              <span style={{ fontSize: 11, color: sc(cls.name).text, background: "rgba(255,255,255,0.6)", padding: "1px 8px", borderRadius: 10, fontWeight: 700 }}>{cls.hours} hrs/wk</span>
             </div>
-          );
-        })}
       </div>
     </div>
   );
@@ -342,7 +187,7 @@ function TimetableView({ tt, classes, teacher, onRegenerate }) {
       html += `<tr><td class="period">${PERIODS[p]}</td>`;
       for (const d of DAYS) {
         const e = myGrid[d]?.[p];
-        const avail = (teacher.available[d] || []).includes(p);
+        const avail = (teacher.availability?.[d] || []).includes(p);
         html += e
           ? `<td><div class="cls">${e.className}</div><div class="sub">${e.sub}</div></td>`
           : avail ? `<td style="color:#d1fae5;font-size:11px;">free</td>`
@@ -413,7 +258,7 @@ function TimetableView({ tt, classes, teacher, onRegenerate }) {
             </thead>
             <tbody>
               {PERIODS.map((per, p) => {
-                const anyAvail = DAYS.some(d => (teacher.available[d] || []).includes(p));
+                const anyAvail = DAYS.some(d => (teacher.availability?.[d] || []).includes(p));
                 return (
                   <tr key={p} style={{ background: !anyAvail ? "#fafafa" : p % 2 === 0 ? "#fff" : "#fafcff" }}>
                     <td style={{ ...tdBase, textAlign: "left", padding: "10px 16px", fontWeight: 700, color: !anyAvail ? "#cbd5e1" : "#334155", fontSize: 12, borderRight: "2px solid #e2e8f0", whiteSpace: "nowrap" }}>
@@ -421,7 +266,7 @@ function TimetableView({ tt, classes, teacher, onRegenerate }) {
                     </td>
                     {DAYS.map(day => {
                       const e = myGrid[day]?.[p];
-                      const avail = (teacher.available[day] || []).includes(p);
+                      const avail = (teacher.availability?.[day] || []).includes(p);
                       const c = e ? sc(e.sub) : null;
                       return (
                         <td key={day} style={{ ...tdBase, background: !avail ? "#fafafa" : "transparent" }}>
@@ -495,68 +340,99 @@ function TimetableView({ tt, classes, teacher, onRegenerate }) {
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
-export default function TimetableGenerator({ courses = [] }) {
+export default function TimetableGenerator() {
   const [tab, setTab] = useState("classes");
   const [teacher, setTeacher] = useState(INIT_TEACHER);
   const [classes, setClasses] = useState(INIT_CLASSES);
   const [result, setResult] = useState(null);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [cModal, setCModal] = useState(null);
   const [genErr, setGenErr] = useState(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (courses && Array.isArray(courses) && courses.length > 0) {
-      const subjects = [...new Set(courses.map(c => c.name))];
-      const fetchedClasses = courses.map(c => ({
-        id: c.id,
-        name: c.name,
-        requirements: [{ subject: c.name, hours: Math.floor(Math.random() * 3) + 2 }]
-      }));
+    fetchProfile();
+    fetchTimetable();
+  }, []);
 
-      setClasses(fetchedClasses);
-      setTeacher(prev => ({
-        ...prev,
-        subjects: subjects,
-        available: genRandAvail()
-      }));
-
-      // Trigger generation automatically
-      setTimeout(() => {
-        setLoading(true);
-        try {
-          const localTeacher = { ...INIT_TEACHER, subjects, available: genRandAvail() };
-          const { ok, tt } = runScheduler(localTeacher, fetchedClasses);
-          if (ok) { setResult(tt); setTab("timetable"); }
-        } catch (e) { console.error(e); }
-        setLoading(false);
-      }, 100);
+  const fetchProfile = async () => {
+    try {
+        const res = await fetch(`${API_BASE}/api/teacher/profile`, { credentials: "include" });
+        const data = await res.json();
+        if (res.ok) {
+            setTeacher({
+                name: data.name,
+                availability: data.availability,
+                courses: data.courses
+            });
+            setClasses(data.courses);
+        }
+    } catch (err) {
+        console.error("Fetch profile error:", err);
     }
-  }, [courses]);
+  };
 
-  function saveClass(c) {
-    if (c.id && classes.find(x => x.id === c.id)) setClasses(classes.map(x => x.id === c.id ? c : x));
-    else setClasses([...classes, { ...c, id: nid() }]);
-    setCModal(null);
-  }
-  function deleteClass(id) { if (window.confirm("Delete this class?")) setClasses(classes.filter(c => c.id !== id)); }
+  const fetchTimetable = async () => {
+    try {
+        const res = await fetch(`${API_BASE}/api/timetable`, { credentials: "include" });
+        const data = await res.json();
+        if (res.ok && data.timetable) {
+            setResult(Object.keys(data.timetable).length > 0 ? data.timetable : null);
+            if (Object.keys(data.timetable).length > 0) setTab("timetable");
+        }
+    } catch (err) {
+        console.error("Fetch timetable error:", err);
+    }
+  };
 
-  function generate() {
-    if (classes.length === 0) { alert("Add at least one class first"); return; }
-    if (teacher.subjects.length === 0) { alert("Set your subjects in My Profile first"); return; }
-    setGenErr(null); setResult(null); setLoading(true);
-    setTimeout(() => {
-      try {
-        const { ok, tt } = runScheduler(teacher, classes);
+  const saveProfile = async (updatedTeacher) => {
+    try {
+        const res = await fetch(`${API_BASE}/api/teacher/profile`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                name: updatedTeacher.name,
+                availability: updatedTeacher.availability,
+                courses: updatedTeacher.courses
+            }),
+            credentials: "include"
+        });
+        if (res.ok) {
+            setTeacher(updatedTeacher);
+            setClasses(updatedTeacher.courses);
+            setProfileOpen(false);
+            alert("Profile saved!");
+        }
+    } catch (err) {
+        console.error("Save profile error:", err);
+        alert("Error saving profile");
+    }
+  };
+
+  async function generate() {
+    if (classes.length === 0) { alert("Add at least one class first (Sync from Dashboard)"); return; }
+    
+    setGenErr(null); setLoading(true);
+    try {
+        const res = await fetch(`${API_BASE}/api/timetable/generate`, {
+            method: "POST",
+            credentials: "include"
+        });
+        const data = await res.json();
+        if (res.ok) {
+            await fetchTimetable();
+            setTab("timetable");
+        } else {
+            setGenErr(data.error || "Generation failed");
+        }
+    } catch (err) {
+        setGenErr("Error: " + err.message);
+    } finally {
         setLoading(false);
-        if (ok) { setResult(tt); setTab("timetable"); }
-        else setGenErr("Could not fit all classes into your available slots. Try adding more availability or reducing required hours.");
-      } catch (e) { setLoading(false); setGenErr("Error: " + e.message); }
-    }, 30);
+    }
   }
 
-  const totalAvail = Object.values(teacher.available).reduce((s, v) => s + v.length, 0);
-  const totalNeeded = classes.reduce((s, c) => s + c.requirements.reduce((ss, r) => ss + r.hours, 0), 0);
+  const totalAvail = Object.values(teacher.availability || {}).reduce((s, v) => s + (v?.length || 0), 0);
+  const totalNeeded = classes.reduce((s, c) => s + (c.hours || 0), 0);
   const feasible = totalAvail >= totalNeeded;
 
   const tabs = [
@@ -567,7 +443,6 @@ export default function TimetableGenerator({ courses = [] }) {
   return (
     <div style={{ background: "#fff", borderRadius: 22, boxShadow: "0 20px 45px rgba(15, 25, 35, 0.08)", border: "1px solid #edf2f7", padding: "24px", fontFamily: "'Segoe UI', system-ui, sans-serif", width: "100%", boxSizing: "border-box" }}>
 
-      {/* Header section substituted with a simpler one that fits App.jsx */}
       <div style={{ padding: "0 0 20px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, borderBottom: "1.5px solid #e2e8f0", marginBottom: 20 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#0f172a" }}>Timetable Planner</h2>
@@ -577,7 +452,7 @@ export default function TimetableGenerator({ courses = [] }) {
           <button onClick={() => setProfileOpen(true)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 10, background: "#f1f5f9", border: "1.5px solid #e2e8f0", cursor: "pointer" }}>
             <div style={{ textAlign: "left" }}>
               <div style={{ color: "#0f172a", fontWeight: 700, fontSize: 12 }}>{teacher.name}</div>
-              <div style={{ color: "#64748b", fontSize: 10 }}>{teacher.subjects.length} subjects available</div>
+              <div style={{ color: "#64748b", fontSize: 10 }}>{totalAvail} slots available</div>
             </div>
             <span style={{ color: "#475569", fontSize: 12, marginLeft: 2 }}>✎</span>
           </button>
@@ -588,7 +463,6 @@ export default function TimetableGenerator({ courses = [] }) {
         </div>
       </div>
 
-      {/* Tab bar + stats */}
       <div style={{ background: "transparent", padding: "0 0 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", gap: 4 }}>
           {tabs.map(t => (
@@ -616,31 +490,24 @@ export default function TimetableGenerator({ courses = [] }) {
         </div>
       </div>
 
-      {/* Error banner */}
       {genErr && (
         <div style={{ margin: "16px 28px 0", padding: "12px 16px", borderRadius: 10, background: "#fff1f2", border: "1.5px solid #fecaca", color: "#b91c1c", fontSize: 13, fontWeight: 500 }}>
           ⚠️ {genErr}
         </div>
       )}
 
-      {/* Content */}
       <div style={{ padding: "10px 0", maxWidth: "100%", margin: "0" }}>
 
-        {/* CLASSES TAB */}
         {tab === "classes" && (
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
               <div>
                 <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: "#0f172a" }}>My Classes</h2>
-                <p style={{ margin: "4px 0 0", fontSize: 12, color: "#64748b" }}>Add the classes you teach and how many periods each subject needs per week</p>
+                <p style={{ margin: "4px 0 0", fontSize: 12, color: "#64748b" }}>Manage the hours needed for each of your synced subjects.</p>
               </div>
-              <button onClick={() => setCModal({ requirements: [] })}
-                style={{ padding: "9px 18px", borderRadius: 9, background: "#0f172a", color: "#fff", border: "none", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>
-                + Add Class
-              </button>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
-              {classes.map(c => <ClassCard key={c.id} cls={c} onEdit={c => setCModal(c)} onDelete={deleteClass} />)}
+              {classes.map(c => <ClassCard key={c.id} cls={c} />)}
               {classes.length === 0 && (
                 <div style={{ gridColumn: "1/-1", textAlign: "center", padding: "60px 20px", color: "#94a3b8" }}>
                   <div style={{ fontSize: 40, marginBottom: 10 }}>🏫</div>
@@ -652,7 +519,6 @@ export default function TimetableGenerator({ courses = [] }) {
           </div>
         )}
 
-        {/* TIMETABLE TAB */}
         {tab === "timetable" && (
           <div>
             {result ? (
@@ -670,7 +536,7 @@ export default function TimetableGenerator({ courses = [] }) {
                 <div style={{ fontSize: 52, marginBottom: 14 }}>📅</div>
                 <div style={{ fontSize: 17, fontWeight: 800, color: "#334155", marginBottom: 8 }}>No timetable generated yet</div>
                 <p style={{ color: "#64748b", fontSize: 13, maxWidth: 340, margin: "0 auto 24px" }}>
-                  Add your classes and make sure your profile availability is set, then hit Generate.
+                  Set your course hour requirements and profile availability, then hit Generate.
                 </p>
                 <button onClick={generate} style={{ padding: "12px 32px", borderRadius: 12, background: "#f59e0b", color: "#0f172a", border: "none", fontWeight: 800, cursor: "pointer", fontSize: 15 }}>
                   ⚡ Generate Schedule
@@ -681,9 +547,7 @@ export default function TimetableGenerator({ courses = [] }) {
         )}
       </div>
 
-      {/* Modals */}
-      {profileOpen && <ProfileModal teacher={teacher} onSave={t => { setTeacher(t); setProfileOpen(false); }} onClose={() => setProfileOpen(false)} />}
-      {cModal && <ClassModal cls={cModal} teacherSubjects={teacher.subjects} onSave={saveClass} onClose={() => setCModal(null)} />}
+      {profileOpen && <ProfileModal teacher={teacher} onSave={saveProfile} onClose={() => setProfileOpen(false)} />}
     </div>
   );
 }

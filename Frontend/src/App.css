@@ -244,6 +244,56 @@ input, select {
   font-weight: 700;
 }
 
+.auth-section {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.user-profile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #ffffff;
+  padding: 8px 16px;
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  border: 1px solid #edf2f7;
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.user-info {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.user-name {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #0e1a25;
+}
+
+.ghost.sm {
+  padding: 2px 0;
+  font-size: 0.75rem;
+  border: none;
+  background: transparent;
+  text-align: left;
+  color: #d0483d;
+  width: fit-content;
+}
+
+.ghost.sm:hover {
+  text-decoration: underline;
+}
+
 @media (max-width: 720px) {
   .tab-list {
     border-radius: 18px;

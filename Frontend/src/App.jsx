@@ -2,36 +2,17 @@ import React, { useState, useEffect } from 'react';
 import './App.css';
 import Timetablegenerator from './components/ui/page/Timetablegenerator';
 
-function AttendanceReport({ courseId }) {
-  const [report, setReport] = useState([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (courseId) {
-      fetchReport();
-    }
-  }, [courseId]);
-
-  const fetchReport = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`http://localhost:5000/api/attendance/report/${courseId}`);
-      const data = await res.json();
-      setReport(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error("Failed to fetch report", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (!courseId) return null;
-
+function AttendanceReport({ report, loading, onRefresh }) {
   return (
     <div className="card">
-      <div className="card-header">
-        <h3>Attendance Report</h3>
-        <p>Overall percentage for all students in this subject.</p>
+      <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <h3>Attendance Report</h3>
+          <p>Overall percentage for all students in this subject.</p>
+        </div>
+        <button className="ghost" onClick={onRefresh} disabled={loading}>
+          {loading ? "Loading..." : "Generate Report"}
+        </button>
       </div>
       <div className="card-body">
         {loading ? (
@@ -92,20 +73,151 @@ export default function App() {
   const [aiResult, setAiResult] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
+  const [user, setUser] = useState(null);
+  const [report, setReport] = useState([]);
+  const [isReportLoading, setIsReportLoading] = useState(false);
+  const [assignments, setAssignments] = useState([]);
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState("");
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisData, setAnalysisData] = useState(null);
 
   const API_BASE = "http://localhost:5000";
 
   useEffect(() => {
+    fetchUser();
     fetchCourses();
   }, []);
 
+  useEffect(() => {
+    if (selectedCourseId) {
+      fetchAssignments(selectedCourseId);
+    }
+  }, [selectedCourseId]);
+
+  const fetchAssignments = async (courseId) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/courses/${courseId}/assignments`, { credentials: "include" });
+      const data = await res.json();
+      setAssignments(Array.isArray(data) ? data : []);
+      if (Array.isArray(data) && data.length > 0) {
+        setSelectedAssignmentId(data[0].id.toString());
+      } else {
+        setSelectedAssignmentId("");
+      }
+    } catch (err) {
+      console.error("Failed to fetch assignments", err);
+    }
+  };
+
+  const syncAssignments = async () => {
+    if (!selectedCourseId) {
+      alert("Please select a subject first.");
+      return;
+    }
+    setIsSyncing(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/courses/${selectedCourseId}/sync-assignments`, {
+        method: "POST",
+        credentials: "include"
+      });
+      const data = await res.json();
+      if (res.ok) {
+        fetchAssignments(selectedCourseId);
+        alert(data.message || "Assignments synced successfully!");
+      } else {
+        alert(data.error || "Sync failed.");
+      }
+    } catch (err) {
+      console.error("Sync assignments error:", err);
+      alert("Error syncing assignments.");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const analyzeSubmissions = async () => {
+    if (!selectedAssignmentId) {
+      alert("Please select an assignment first.");
+      return;
+    }
+    setIsAnalyzing(true);
+    setAnalysisData(null);
+    setAiError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/assignments/${selectedAssignmentId}/analyze`, {
+        method: "POST",
+        credentials: "include"
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setAnalysisData(data);
+      } else {
+        setAiError(data.error || "Analysis failed.");
+      }
+    } catch (err) {
+      console.error("Analysis error:", err);
+      setAiError("Error during submission analysis.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const fetchReport = async () => {
+    if (!selectedCourseId) return;
+    setIsReportLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/attendance/report/${selectedCourseId}`, { credentials: "include" });
+      const data = await res.json();
+      setReport(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error("Failed to fetch report", err);
+    } finally {
+      setIsReportLoading(false);
+    }
+  };
+
+  const fetchUser = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/me`, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.authenticated) {
+          setUser(data.user);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch user session", err);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/logout`, { 
+        method: "POST",
+        credentials: "include" 
+      });
+      if (res.ok) {
+        setUser(null);
+        setCourses([]);
+        alert("Logged out successfully");
+      }
+    } catch (err) {
+      console.error("Logout failed", err);
+    }
+  };
+
   const fetchCourses = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/courses`);
-      const data = await res.json();
-      setCourses(Array.isArray(data) ? data : []);
-      if (Array.isArray(data) && data.length > 0 && !selectedCourseId) {
-        setSelectedCourseId(data[0].id.toString());
+      const res = await fetch(`${API_BASE}/api/courses`, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        setCourses(Array.isArray(data) ? data : []);
+        if (Array.isArray(data) && data.length > 0 && !selectedCourseId) {
+          setSelectedCourseId(data[0].id.toString());
+        }
+      } else if (res.status === 401) {
+        setCourses([]);
+        setUser(null);
       }
     } catch (err) {
       console.error("Failed to fetch courses", err);
@@ -115,7 +227,7 @@ export default function App() {
   const fetchStudents = async (courseId) => {
     if (!courseId) return;
     try {
-      const res = await fetch(`${API_BASE}/api/courses/${courseId}/students`);
+      const res = await fetch(`${API_BASE}/api/courses/${courseId}/students`, { credentials: "include" });
       const data = await res.json();
       setStudents(data);
 
@@ -128,50 +240,69 @@ export default function App() {
   };
 
   const syncStudents = async () => {
-    if (!selectedCourseId) return;
+    if (!selectedCourseId) {
+      alert("Please select a subject first.");
+      return;
+    }
     setIsSyncing(true);
     try {
       const res = await fetch(`${API_BASE}/api/courses/${selectedCourseId}/sync-students`, {
-        method: "POST"
+        method: "POST",
+        credentials: "include"
       });
+      const data = await res.json();
       if (res.ok) {
         fetchStudents(selectedCourseId);
-        alert("Students synced successfully!");
+        alert(data.message || "Students synced successfully!");
       } else {
-        const error = await res.json();
-        alert(error.error || "Sync failed.");
+        alert(data.error || "Sync failed. Please ensure you are signed in and have classroom permissions.");
       }
     } catch (err) {
-      alert("Error syncing students");
+      console.error("Sync students error:", err);
+      alert("Error syncing students. Check your internet connection or backend server.");
     } finally {
       setIsSyncing(false);
     }
   };
 
-  const handleGoogleSync = () => {
+  const handleSignIn = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/google/url`, { credentials: "include" });
+      const data = await res.json();
+      if (data.auth_url) {
+        window.location.href = data.auth_url;
+      } else {
+        alert("Could not get authentication URL.");
+      }
+    } catch (err) {
+      console.error("Auth URL fetch failed", err);
+      // Fallback to direct redirect if API fails
+      window.location.href = `${API_BASE}/api/auth/google`;
+    }
+  };
+
+  const handleSyncCourses = async () => {
     setSyncError("");
     setIsSyncing(true);
-    fetch(`${API_BASE}/api/classroom/sync`, { credentials: "include" })
-      .then(async (res) => {
-        if (res.status === 401) {
-          window.location.href = `${API_BASE}/api/auth/google`;
-          return null;
-        }
-        if (!res.ok) {
-          throw new Error("Sync failed");
-        }
-        return res.json();
-      })
-      .then((data) => {
-        if (!data) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/classroom/sync`, { credentials: "include" });
+      if (res.status === 401) {
+        handleSignIn();
+        return;
+      }
+      const data = await res.json();
+      if (res.ok) {
         setCourses(Array.isArray(data.courses) ? data.courses : []);
-      })
-      .catch(() => {
-        setSyncError("Could not sync courses. Please try again.");
-      })
-      .finally(() => {
-        setIsSyncing(false);
-      });
+        alert("Courses synced successfully!");
+      } else {
+        setSyncError(data.error || "Sync failed");
+      }
+    } catch (err) {
+      console.error("Sync courses error:", err);
+      setSyncError("Could not sync courses. Check connection or backend.");
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   useEffect(() => {
@@ -179,6 +310,39 @@ export default function App() {
       fetchStudents(selectedCourseId);
     }
   }, [selectedCourseId]);
+
+  useEffect(() => {
+    if (selectedCourseId) {
+      fetchReport();
+    }
+  }, [selectedCourseId]);
+
+  useEffect(() => {
+    if (selectedCourseId && attendanceDate) {
+      fetchAttendance();
+    }
+  }, [selectedCourseId, attendanceDate]);
+
+  const fetchAttendance = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/attendance?course_id=${selectedCourseId}&date=${attendanceDate}`, { 
+        credentials: "include" 
+      });
+      const data = await res.json();
+      if (res.ok && data.records) {
+        // Merge with existing students to ensure everyone is listed
+        setAttendanceRecords(prev => {
+          const updated = { ...prev };
+          Object.entries(data.records).forEach(([sId, status]) => {
+            updated[sId] = status;
+          });
+          return updated;
+        });
+      }
+    } catch (err) {
+      console.error("Failed to fetch attendance records", err);
+    }
+  };
 
   const handleAttendanceChange = (studentId, status) => {
     setAttendanceRecords(prev => ({ ...prev, [studentId]: status }));
@@ -198,9 +362,11 @@ export default function App() {
           course_id: parseInt(selectedCourseId),
           date: attendanceDate,
           records
-        })
+        }),
+        credentials: "include"
       });
       alert("Attendance saved!");
+      fetchReport();
     } catch (err) {
       alert("Error saving attendance");
     }
@@ -210,11 +376,20 @@ export default function App() {
     setGeneratedPaper("");
     setError("");
     setIsGenerating(true);
+    
+    // Find the course name for the selected ID
+    const selectedCourse = courses.find(c => c.id.toString() === selectedCourseId);
+    const courseName = selectedCourse ? selectedCourse.name : "General Course";
+
     try {
       const res = await fetch(`${API_BASE}/api/question-paper/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic: qPaperTopic, difficulty: "Hard" })
+        body: JSON.stringify({ 
+          topic: qPaperTopic, 
+          difficulty: "Medium",
+          course_name: courseName
+        })
       });
       const data = await res.json();
       if (!res.ok) {
@@ -266,9 +441,21 @@ export default function App() {
           <h1>ClassOps</h1>
           <p className="subtitle">Keep syllabus targets, compliance metrics, and AI tools in one focused workspace.</p>
         </div>
-        <button className="primary" onClick={handleGoogleSync} disabled={isSyncing}>
-          {isSyncing ? "Syncing..." : "Sync with Google Classroom"}
-        </button>
+        <div className="auth-section">
+          {user ? (
+            <div className="user-profile">
+              {user.picture && <img src={user.picture} alt={user.name} className="avatar" />}
+              <div className="user-info">
+                <span className="user-name">{user.name}</span>
+                <button className="ghost sm" onClick={handleLogout}>Logout</button>
+              </div>
+            </div>
+          ) : (
+            <button className="primary" onClick={handleSignIn} disabled={isSyncing}>
+              {isSyncing ? "Connecting..." : "Sign in with Google"}
+            </button>
+          )}
+        </div>
       </header>
 
       <div className="tabs">
@@ -337,7 +524,7 @@ export default function App() {
                 <p>Synced courses from your connected Google Classroom account.</p>
               </div>
               <div className="card-body">
-                <button className="primary" onClick={handleGoogleSync} disabled={isSyncing}>
+                <button className="primary" onClick={handleSyncCourses} disabled={isSyncing}>
                   {isSyncing ? "Syncing..." : "Sync Courses"}
                 </button>
                 {syncError && <p className="error">{syncError}</p>}
@@ -427,7 +614,11 @@ export default function App() {
               </div>
             </div>
 
-            <AttendanceReport courseId={parseInt(selectedCourseId)} />
+            <AttendanceReport 
+              report={report} 
+              loading={isReportLoading} 
+              onRefresh={fetchReport} 
+            />
           </section>
         )}
 
@@ -436,10 +627,20 @@ export default function App() {
             <div className="card">
               <div className="card-header">
                 <h3>Bloom's Taxonomy Question Paper Generator</h3>
-                <p>Generate balanced questions aligned to cognitive levels.</p>
+                <p>Generate balanced questions with CO mapping and cognitive levels.</p>
               </div>
               <div className="card-body">
                 <div className="input-row">
+                  <select
+                    value={selectedCourseId}
+                    onChange={(e) => setSelectedCourseId(e.target.value)}
+                    style={{ width: '200px' }}
+                  >
+                    <option value="">Select Subject</option>
+                    {courses.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
                   <input
                     style={{ flex: 1 }}
                     placeholder="Enter topic (e.g., Operating Systems)"
@@ -451,7 +652,7 @@ export default function App() {
                   </button>
                 </div>
                 {generatedPaper && (
-                  <div className="output">
+                  <div className="output" style={{ whiteSpace: 'pre-wrap', textAlign: 'left', fontFamily: 'monospace' }}>
                     {generatedPaper}
                   </div>
                 )}
@@ -461,8 +662,87 @@ export default function App() {
 
             <div className="card">
               <div className="card-header">
-                <h3>Plagiarism & Originality Check</h3>
-                <p>Upload a PDF or DOCX to measure AI content usage.</p>
+                <h3>Classroom Plagiarism & AI Analysis</h3>
+                <p>Select an assignment to cross-check all student submissions for similarity and AI patterns.</p>
+              </div>
+              <div className="card-body">
+                <div className="input-row">
+                  <select
+                    value={selectedCourseId}
+                    onChange={(e) => setSelectedCourseId(e.target.value)}
+                    style={{ width: '200px' }}
+                  >
+                    <option value="">Select Subject</option>
+                    {courses.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                  <button className="ghost sm" onClick={syncAssignments} disabled={isSyncing}>
+                    {isSyncing ? "Syncing..." : "Sync Assignments"}
+                  </button>
+                </div>
+
+                <div className="input-row" style={{ marginTop: '12px' }}>
+                  <select
+                    style={{ flex: 1 }}
+                    value={selectedAssignmentId}
+                    onChange={(e) => setSelectedAssignmentId(e.target.value)}
+                  >
+                    <option value="">Select Assignment</option>
+                    {assignments.map(a => (
+                      <option key={a.id} value={a.id}>{a.title}</option>
+                    ))}
+                  </select>
+                  <button className="primary" onClick={analyzeSubmissions} disabled={!selectedAssignmentId || isAnalyzing}>
+                    {isAnalyzing ? "Analyzing..." : "Analyze All Submissions"}
+                  </button>
+                </div>
+                
+                {isAnalyzing && <p style={{ marginTop: '12px' }}>Analyzing submissions... this may take a moment.</p>}
+                
+                {analysisData && (
+                  <div style={{ marginTop: '20px' }}>
+                    <table className="attendance-table">
+                      <thead>
+                        <tr>
+                          <th>Student Name</th>
+                          <th style={{ textAlign: 'right' }}>AI Score</th>
+                          <th style={{ textAlign: 'right' }}>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {analysisData.results.map((r, idx) => (
+                          <tr key={idx}>
+                            <td>{r.name}</td>
+                            <td style={{ textAlign: 'right' }}>{r.ai_score}%</td>
+                            <td style={{ textAlign: 'right' }}>{r.status}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+
+                    {analysisData.alerts && analysisData.alerts.length > 0 && (
+                      <div style={{ marginTop: '15px', padding: '12px', background: '#fff5f5', border: '1px solid #feb2b2', borderRadius: '6px' }}>
+                        <h4 style={{ color: '#c53030', marginTop: 0 }}>🚩 Plagiarism Alerts</h4>
+                        <ul style={{ margin: 0, paddingLeft: '20px' }}>
+                          {analysisData.alerts.map((a, idx) => (
+                            <li key={idx} style={{ color: '#c53030' }}>
+                              Match between <b>{a.students[0]}</b> and <b>{a.students[1]}</b> ({a.score}% similarity)
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {aiError && <p className="error">{aiError}</p>}
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="card-header">
+                <h3>Manual File AI Check</h3>
+                <p>Upload a PDF or DOCX to measure AI content usage for a single file.</p>
               </div>
               <div className="card-body">
                 <div className="input-row">
@@ -475,8 +755,7 @@ export default function App() {
                     {aiLoading ? "Analyzing..." : "Analyze File"}
                   </button>
                 </div>
-                {aiError && <p className="error">{aiError}</p>}
-                {aiResult && (
+                {aiResult && !isAnalyzing && (
                   <div className="output">
                     {aiResult}
                   </div>
