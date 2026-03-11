@@ -5,7 +5,7 @@ os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 from flask import Flask, request, jsonify, redirect, url_for, session
 from flask_cors import CORS
 from flask_session import Session
-from models import db, Teacher, Course, Student, Attendance, MaterialTarget, StudentMetric, Assignment
+from models import db, Teacher, Course, Student, Attendance, MaterialTarget, StudentMetric, Assignment, Timetable, TimetableSlot
 from dotenv import load_dotenv
 import google.oauth2.credentials
 from google_auth_oauthlib.flow import Flow
@@ -373,7 +373,8 @@ def analyze_submissions(assignment_id):
                     content = f"Note: This student submitted files ({', '.join(file_names)}). Automated analysis for Google Drive files is currently disabled (requires Drive API)."
 
             if not content or content.strip() == "":
-                content = f"Empty submission or unsupported format from {name}."
+                content = "" # Explicitly empty so ai_checker identifies it as "No File"
+                file_info = " [No Submission]"
             
             batch_input.append({
                 "name": name + file_info, 
@@ -396,7 +397,17 @@ def analyze_submissions(assignment_id):
             })
             
         formatted_alerts = []
+        formatted_plagiarism = []
         for p in analysis_data['plagiarism_results']:
+            # For the general list
+            formatted_plagiarism.append({
+                "name": p['name'],
+                "status": p['status'],
+                "matched_with": p.get('matched_with', 'N/A'),
+                "score": p.get('highest_match_percent', 0)
+            })
+            
+            # For specific red alerts
             if "❌" in p['status']:
                 formatted_alerts.append({
                     "students": [p['name'], p['matched_with']],
@@ -406,6 +417,7 @@ def analyze_submissions(assignment_id):
         return jsonify({
             "success": True,
             "results": formatted_results,
+            "plagiarism": formatted_plagiarism,
             "alerts": formatted_alerts,
             "submission_count": len(submissions)
         })
@@ -423,9 +435,13 @@ def generate_question_paper():
     topic = data.get('topic')
     difficulty = data.get('difficulty', 'Medium')
     course_name = data.get('course_name', 'General Course')
+    
+    # Use key from request if provided, otherwise fallback to server env
+    custom_key = data.get('api_key')
+    effective_key = custom_key if custom_key else OPENAI_API_KEY
 
-    if not OPENAI_API_KEY:
-        return jsonify({"error": "OpenAI API key is missing. Set OPENAI_API_KEY in .env."}), 400
+    if not effective_key:
+        return jsonify({"error": "OpenAI API key is missing. Please provide one in the input box below."}), 400
 
     prompt = f"""Generate a university-level question paper for the course '{course_name}' on the topic '{topic}' with a '{difficulty}' difficulty. 
     The question paper MUST strictly follow Bloom's Taxonomy and include Course Outcome (CO) mapping for each question.
@@ -440,7 +456,7 @@ def generate_question_paper():
     """
 
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
+        client = OpenAI(api_key=effective_key)
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -722,6 +738,48 @@ def get_timetable():
         }
 
     return jsonify({"timetable": result})
+
+@app.route('/api/config/update-key', methods=['POST'])
+def update_api_key():
+    data = request.json
+    new_key = data.get('api_key')
+    if not new_key:
+        return jsonify({"error": "No API key provided"}), 400
+
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    try:
+        # Read existing .env content
+        lines = []
+        if os.path.exists(env_path):
+            with open(env_path, 'r') as f:
+                lines = f.readlines()
+
+        # Update or add OPENAI_API_KEY
+        key_found = False
+        new_lines = []
+        for line in lines:
+            if line.startswith('OPENAI_API_KEY='):
+                new_lines.append(f'OPENAI_API_KEY={new_key}\n')
+                key_found = True
+            else:
+                new_lines.append(line)
+        
+        if not key_found:
+            new_lines.append(f'OPENAI_API_KEY={new_key}\n')
+
+        # Write back to .env
+        with open(env_path, 'w') as f:
+            f.writelines(new_lines)
+
+        # Update current process variable
+        global OPENAI_API_KEY
+        OPENAI_API_KEY = new_key
+        os.environ['OPENAI_API_KEY'] = new_key
+
+        return jsonify({"message": "API Key updated successfully in .env and server memory."})
+    except Exception as e:
+        app.logger.exception("Failed to update .env")
+        return jsonify({"error": f"Failed to update .env: {str(e)}"}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

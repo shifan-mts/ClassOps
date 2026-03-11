@@ -80,6 +80,8 @@ export default function App() {
   const [selectedAssignmentId, setSelectedAssignmentId] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisData, setAnalysisData] = useState(null);
+  const [customApiKey, setCustomApiKey] = useState("");
+  const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
 
   const API_BASE = "http://localhost:5000";
 
@@ -93,6 +95,29 @@ export default function App() {
       fetchAssignments(selectedCourseId);
     }
   }, [selectedCourseId]);
+
+  const updateServerKey = async () => {
+    if (!customApiKey) {
+      alert("Please enter a key first.");
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/config/update-key`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: customApiKey })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert("Server API Key updated successfully!");
+        setIsQuotaExceeded(false); // Hide the box as it's now updated
+      } else {
+        alert(data.error || "Failed to update key.");
+      }
+    } catch (err) {
+      alert("Error: " + err.message);
+    }
+  };
 
   const fetchAssignments = async (courseId) => {
     try {
@@ -388,17 +413,22 @@ export default function App() {
         body: JSON.stringify({ 
           topic: qPaperTopic, 
           difficulty: "Medium",
-          course_name: courseName
+          course_name: courseName,
+          api_key: customApiKey
         })
       });
       const data = await res.json();
       if (!res.ok) {
+        if (res.status === 429 || (data.error && data.error.toLowerCase().includes("quota"))) {
+          setIsQuotaExceeded(true);
+        }
         throw new Error(data?.error || `Request failed with status ${res.status}`);
       }
       const content = data?.question_paper || data?.questionPaper || "No question paper returned.";
       setGeneratedPaper(content);
+      setError("");
     } catch (err) {
-      setError(err?.message || "Could not generate the question paper. Check the backend server and try again.");
+      setError(err?.message || "Could not generate the question paper.");
     } finally {
       setIsGenerating(false);
     }
@@ -629,7 +659,19 @@ export default function App() {
                 <h3>Bloom's Taxonomy Question Paper Generator</h3>
                 <p>Generate balanced questions with CO mapping and cognitive levels.</p>
               </div>
-              <div className="card-body">
+            <div className="card-body">
+                {isQuotaExceeded && (
+                  <div className="input-row" style={{ marginBottom: '12px' }}>
+                    <input
+                      style={{ flex: 1 }}
+                      type="password"
+                      placeholder="Enter OpenAI API Key (Required: Server credits low)"
+                      value={customApiKey}
+                      onChange={(e) => setCustomApiKey(e.target.value)}
+                    />
+                    <button className="ghost" onClick={updateServerKey}>Update Server Key</button>
+                  </div>
+                )}
                 <div className="input-row">
                   <select
                     value={selectedCourseId}
@@ -651,12 +693,21 @@ export default function App() {
                     {isGenerating ? "Generating..." : "Generate"}
                   </button>
                 </div>
+                {error && (
+                  <div style={{ marginTop: '12px', padding: '12px', background: '#fff5f5', border: '1px solid #feb2b2', borderRadius: '6px' }}>
+                    <p className="error" style={{ margin: 0, color: '#c53030' }}>⚠️ {error}</p>
+                    {isQuotaExceeded && (
+                      <p style={{ fontSize: '13px', marginTop: '8px', color: '#742a2a' }}>
+                        <b>Action Required:</b> Please enter your own OpenAI API Key in the box above to continue.
+                      </p>
+                    )}
+                  </div>
+                )}
                 {generatedPaper && (
                   <div className="output" style={{ whiteSpace: 'pre-wrap', textAlign: 'left', fontFamily: 'monospace' }}>
                     {generatedPaper}
                   </div>
                 )}
-                {error && <p className="error">{error}</p>}
               </div>
             </div>
 
@@ -720,6 +771,33 @@ export default function App() {
                         ))}
                       </tbody>
                     </table>
+
+                    <div style={{ marginTop: '24px' }}>
+                      <h4 style={{ marginBottom: '12px', color: '#334155' }}>Plagiarism Check (100% Match Rule)</h4>
+                      <table className="attendance-table">
+                        <thead>
+                          <tr>
+                            <th>Student Name</th>
+                            <th style={{ textAlign: 'right' }}>Match %</th>
+                            <th style={{ textAlign: 'right' }}>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {analysisData.plagiarism && analysisData.plagiarism.map((p, idx) => (
+                            <tr key={idx}>
+                              <td>
+                                {p.name}
+                                {p.matched_with !== 'N/A' && <div style={{ fontSize: '11px', color: '#64748b' }}>Matched with: {p.matched_with}</div>}
+                              </td>
+                              <td style={{ textAlign: 'right' }}>{p.score}%</td>
+                              <td style={{ textAlign: 'right', color: p.status.includes('❌') ? '#dc2626' : 'inherit', fontWeight: p.status.includes('❌') ? 'bold' : 'normal' }}>
+                                {p.status}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
 
                     {analysisData.alerts && analysisData.alerts.length > 0 && (
                       <div style={{ marginTop: '15px', padding: '12px', background: '#fff5f5', border: '1px solid #feb2b2', borderRadius: '6px' }}>
