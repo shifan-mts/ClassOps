@@ -1,103 +1,91 @@
 import os
 import tempfile
 import re
-import zlib
 import math
 from typing import List, Dict
+from collections import Counter
+import numpy as np
 from langchain_community.document_loaders import PyPDFLoader, UnstructuredFileLoader, Docx2txtLoader
 
-# Optimal Machine Learning Imports
-import numpy as np
+# ==========================================
+# 1. AI DETECTION ENGINE (Entropy & Burstiness)
+# ==========================================
+
+class AIDetector:
+    def __init__(self, text):
+        self.text = text
+        # Clean text for analysis
+        self.clean_text = re.sub(r'\s+', ' ', text).strip()
+        self.sentences = [s.strip() for s in re.split(r'[.!?]+', self.clean_text) if len(s.strip()) > 2]
+        self.words = re.findall(r'\b\w+\b', self.clean_text.lower())
+
+    def _get_entropy(self):
+        """Calculates Shannon Entropy of the word frequency distribution."""
+        if not self.words:
+            return 0
+        counts = Counter(self.words)
+        probs = [count / len(self.words) for count in counts.values()]
+        return -sum(p * math.log2(p) for p in probs)
+
+    def _get_burstiness(self):
+        """Calculates Burstiness (Standard Deviation of sentence lengths)."""
+        if len(self.sentences) < 2:
+            return 0
+        sentence_lengths = [len(s.split()) for s in self.sentences]
+        return np.std(sentence_lengths)
+
+    def calculate_score(self):
+        """
+        Returns AI probability percentage (0-100).
+        Lower Entropy (< 3.5) and Lower Burstiness (< 5) suggest AI.
+        """
+        if not self.words or len(self.words) < 10:
+            return 0.0
+
+        entropy = self._get_entropy()
+        burstiness = self._get_burstiness()
+
+        # 1. Entropy Score (Threshold based on standard AI predictability)
+        # AI texts typically have lower entropy (more predictable word usage)
+        e_score = 1 if entropy < 4.0 else 0 
+        
+        # 2. Burstiness Score (Threshold based on sentence uniformity)
+        # AI texts typically have very uniform sentence lengths (low SD)
+        b_score = 1 if burstiness < 4.5 else 0
+        
+        # Weighted Probability (0.6*Entropy + 0.4*Burstiness)
+        # We scale it to 100%
+        ai_prob = (0.6 * e_score + 0.4 * b_score) * 100
+        
+        # Add a subtle "shading" based on raw values for more realistic results
+        if ai_prob > 0:
+            # Slightly adjust based on how far below threshold they are
+            adjustment = (4.0 - entropy) * 5 if entropy < 4.0 else 0
+            ai_prob = min(99.0, ai_prob + adjustment)
+
+        return round(ai_prob, 2)
 
 # ==========================================
-# 0. AI DETECTION ML SETUP
-# ==========================================
-try:
-    from transformers import pipeline
-    # High-accuracy model for detecting ChatGPT/LLM content
-    ai_detector = pipeline(
-        "text-classification", 
-        model="Hello-SimpleAI/chatgpt-detector-roberta",
-        truncation=True, 
-        max_length=512
-    )
-    USE_ML_AI_DETECTION = True
-except Exception as e:
-    print(f"Warning: ML model failed to load. Using fallback heuristics. Error: {e}")
-    USE_ML_AI_DETECTION = False
-
-# ==========================================
-# 1. TEXT PREPROCESSING
+# 2. TEXT NORMALIZATION
 # ==========================================
 
 def clean_text_strict(text: str) -> str:
-    """
-    Normalizes text for a STRICT 100% match comparison.
-    Removes extra spaces, makes everything lowercase, and strips punctuation.
-    """
+    """Normalizes text for 100% match comparison."""
     if not text or not isinstance(text, str):
         return ""
-    
     text = text.lower()
-    # Remove all punctuation and symbols to get just the raw words
     text = re.sub(r'[^\w\s]', '', text)
-    # Replace multiple spaces/newlines with a single space
     text = re.sub(r'\s+', ' ', text)
-    
     return text.strip()
-
-# ==========================================
-# 2. AI DETECTION LOGIC
-# ==========================================
-
-def detect_ai_content(text: str) -> float:
-    if not text or len(text.split()) < 20:
-        return 0.0
-
-    if USE_ML_AI_DETECTION:
-        try:
-            result = ai_detector(text)[0]
-            if result['label'].lower() == 'chatgpt':
-                return result['score']
-            else:
-                return 1.0 - result['score']
-        except Exception:
-            pass 
-            
-    # --- FALLBACK HEURISTIC ---
-    try:
-        compressed = zlib.compress(text.encode('utf-8'))
-        ratio = len(compressed) / len(text)
-    except:
-        ratio = 0.5
-
-    sentences = [s.strip() for s in text.split('.') if len(s.strip()) > 5]
-    if len(sentences) > 2:
-        lens = [len(s.split()) for s in sentences]
-        mean = sum(lens) / len(lens)
-        std_dev = math.sqrt(sum((x - mean) ** 2 for x in lens) / len(lens))
-        burstiness_score = max(0, 1.0 - (std_dev / 12.0))
-    else:
-        burstiness_score = 0.8
-
-    score = ((1.0 - ratio) * 0.5) + (burstiness_score * 0.5)
-    return min(max(score, 0), 1)
 
 # ==========================================
 # 3. PLAGIARISM DETECTION (Strict 100% Rule)
 # ==========================================
 
 def check_strict_plagiarism(submissions: List[Dict]) -> List[Dict]:
-    """
-    Checks if students copied from each other.
-    Flags ONLY if the normalized content is a 100% exact match.
-    """
     results = []
-    
     for i, sub in enumerate(submissions):
         content = sub.get('clean_content', '')
-        
-        # 1. Handle Empty Files explicitly
         if not content or len(content.split()) < 5:
             results.append({
                 "name": sub['name'],
@@ -109,14 +97,9 @@ def check_strict_plagiarism(submissions: List[Dict]) -> List[Dict]:
             
         is_copied = False
         matched_peer = None
-        
-        # 2. Compare against all others for a 100% match
         for j, other_sub in enumerate(submissions):
             if i != j:
-                other_content = other_sub.get('clean_content', '')
-                
-                # STRICT 100% EQUALITY CHECK
-                if content == other_content and len(other_content) > 0:
+                if content == other_sub.get('clean_content', ''):
                     is_copied = True
                     matched_peer = other_sub['name']
                     break
@@ -124,7 +107,7 @@ def check_strict_plagiarism(submissions: List[Dict]) -> List[Dict]:
         if is_copied:
             results.append({
                 "name": sub['name'],
-                "status": "❌ Plagiarized (100% Exact Match)",
+                "status": "❌ Plagiarized (100% Match)",
                 "highest_match_percent": 100.0,
                 "matched_with": matched_peer
             })
@@ -135,12 +118,16 @@ def check_strict_plagiarism(submissions: List[Dict]) -> List[Dict]:
                 "highest_match_percent": 0.0,
                 "matched_with": "N/A"
             })
-            
     return results
 
 # ==========================================
 # 4. EXPORTED API UTILITIES
 # ==========================================
+
+def detect_ai_content(text: str) -> float:
+    """Entry point for single text AI detection."""
+    detector = AIDetector(text)
+    return detector.calculate_score() / 100.0 # Return 0-1 range for internal app compatibility
 
 def extract_text_from_file(file_path: str, ext: str) -> str:
     try:
@@ -153,26 +140,25 @@ def extract_text_from_file(file_path: str, ext: str) -> str:
         else:
             loader = UnstructuredFileLoader(file_path)
             return loader.load()[0].page_content
-    except Exception as e:
-        print(f"Failed to extract {file_path}: {e}")
+    except Exception:
         return ""
 
 def analyze_text(text: str) -> Dict:
     if not text or len(text.strip()) == 0:
         return {"success": False, "error": "No text provided"}
     
-    clean_text = clean_text_strict(text)
-    ai_score = detect_ai_content(text)
+    score_0_1 = detect_ai_content(text)
+    ai_score_percent = score_0_1 * 100
     
     status = "✅ Likely Human"
-    if ai_score >= 0.75: status = "⚠️ Highly Likely AI"
-    elif ai_score >= 0.40: status = "🔶 Partial AI / Edited"
+    if ai_score_percent >= 70: status = "⚠️ Likely AI"
+    elif ai_score_percent >= 40: status = "🔶 Partial AI"
         
     return {
         "success": True,
-        "ai_score": round(ai_score * 100, 2),
+        "ai_score": round(ai_score_percent, 2),
         "status": status,
-        "is_ai": ai_score >= 0.75
+        "is_ai": ai_score_percent >= 70
     }
 
 def handle_upload(file) -> Dict:
@@ -182,44 +168,38 @@ def handle_upload(file) -> Dict:
         tmp_path = tmp.name
     try:
         content = extract_text_from_file(tmp_path, ext)
-        if not content:
-            return {"success": False, "error": "Could not extract text from file."}
+        if not content: return {"success": False, "error": "Could not extract text."}
         return analyze_text(content)
     finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        if os.path.exists(tmp_path): os.remove(tmp_path)
 
 def run_batch_analysis(submissions: List[Dict]) -> Dict:
     ai_results = []
-    
-    # 1. Clean texts for strict 100% matching
+    # 1. Clean texts
     for sub in submissions:
         sub['clean_content'] = clean_text_strict(sub.get('content', ''))
 
-    # 2. Run AI Detection
+    # 2. Run AI Detection using Entropy/Burstiness
     for sub in submissions:
         raw_content = sub.get('content', '')
-        
         if not sub['clean_content'] or len(sub['clean_content'].split()) < 5:
-            ai_results.append({
-                "name": sub['name'], 
-                "ai_score": 0.0, 
-                "status": "⚪ No File Submitted / Empty"
-            })
+            ai_results.append({"name": sub['name'], "ai_score": 0.0, "status": "⚪ No File Submitted / Empty"})
             continue
 
-        ai_score = detect_ai_content(raw_content)
-        ai_status = "✅ Likely Human"
-        if ai_score >= 0.75: ai_status = "⚠️ Highly Likely AI"
-        elif ai_score >= 0.40: ai_status = "🔶 Partial AI / Edited"
+        detector = AIDetector(raw_content)
+        ai_score = detector.calculate_score()
+        
+        status = "✅ Likely Human"
+        if ai_score >= 70: status = "⚠️ Likely AI"
+        elif ai_score >= 40: status = "🔶 Partial AI"
             
         ai_results.append({
             "name": sub['name'],
-            "ai_score": round(ai_score * 100, 2),
-            "status": ai_status
+            "ai_score": round(ai_score, 2),
+            "status": status
         })
 
-    # 3. Run STRICT 100% Plagiarism Detection
+    # 3. Run Strict Plagiarism Check
     plagiarism_results = check_strict_plagiarism(submissions)
 
     return {
