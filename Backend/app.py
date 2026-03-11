@@ -2,7 +2,7 @@ import os
 # 1. Force HTTP for local testing (No HTTPS needed) - Must be set BEFORE imports
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
-from flask import Flask, request, jsonify, redirect, url_for, session
+from flask import Flask, request, jsonify, redirect, url_for, session, send_file
 from flask_cors import CORS
 from flask_session import Session
 from models import db, Teacher, Course, Student, Attendance, MaterialTarget, StudentMetric, Assignment, Timetable, TimetableSlot
@@ -15,6 +15,8 @@ import io
 import difflib
 from openai import OpenAI
 from datetime import datetime, timezone
+from io import BytesIO
+from textwrap import wrap
 from ai_checker import handle_upload, analyze_text, extract_text_from_file
 
 load_dotenv()
@@ -486,7 +488,9 @@ def generate_question_paper():
 @app.route('/api/targets', methods=['GET', 'POST'])
 def manage_targets():
     if request.method == 'POST':
-        data = request.json
+        data = request.json or {}
+        if not data.get('topic') or not data.get('date') or not data.get('course_id'):
+            return jsonify({"error": "topic, date, and course_id are required"}), 400
         new_target = MaterialTarget(
             topic=data['topic'], 
             target_date=datetime.strptime(data['date'], '%Y-%m-%d').date(),
@@ -494,12 +498,274 @@ def manage_targets():
         )
         db.session.add(new_target)
         db.session.commit()
-        return jsonify({"message": "Target added"}), 201
+        return jsonify({
+            "id": new_target.id,
+            "topic": new_target.topic,
+            "completed": new_target.is_completed,
+            "date": new_target.target_date.strftime('%Y-%m-%d'),
+            "course_id": new_target.course_id,
+            "course_name": new_target.course.name if new_target.course else None
+        }), 201
     
-    targets = MaterialTarget.query.all()
-    return jsonify([{"id": t.id, "topic": t.topic, "completed": t.is_completed} for t in targets])
+    course_id = request.args.get('course_id')
+    query = MaterialTarget.query
+    if course_id:
+        try:
+            course_id = int(course_id)
+        except ValueError:
+            return jsonify({"error": "course_id must be an integer"}), 400
+        query = query.filter_by(course_id=course_id)
+    targets = query.order_by(MaterialTarget.target_date.asc()).all()
+    return jsonify([
+        {
+            "id": t.id,
+            "topic": t.topic,
+            "completed": t.is_completed,
+            "date": t.target_date.strftime('%Y-%m-%d'),
+            "course_id": t.course_id,
+            "course_name": t.course.name if t.course else None
+        }
+        for t in targets
+    ])
+
+@app.route('/api/targets/<int:target_id>', methods=['PATCH'])
+def update_target(target_id):
+    data = request.json or {}
+    target = MaterialTarget.query.get_or_404(target_id)
+    if 'topic' in data and data['topic']:
+        target.topic = data['topic']
+    if 'date' in data and data['date']:
+        target.target_date = datetime.strptime(data['date'], '%Y-%m-%d').date()
+    if 'completed' in data:
+        target.is_completed = bool(data['completed'])
+    db.session.commit()
+    return jsonify({
+        "id": target.id,
+        "topic": target.topic,
+        "completed": target.is_completed,
+        "date": target.target_date.strftime('%Y-%m-%d'),
+        "course_id": target.course_id,
+        "course_name": target.course.name if target.course else None
+    }), 200
 
 # ==========================================
+
+# ==========================================
+# 4B. COMPLIANCE METRICS & REPORTS
+# ==========================================
+
+def compute_compliance_metrics(course_id=None):
+    targets_query = MaterialTarget.query
+    attendance_query = Attendance.query
+
+    if course_id:
+        targets_query = targets_query.filter_by(course_id=course_id)
+        attendance_query = attendance_query.filter_by(course_id=course_id)
+
+    total_targets = targets_query.count()
+    completed_targets = targets_query.filter_by(is_completed=True).count()
+    pending_targets = max(0, total_targets - completed_targets)
+    co_coverage = round((completed_targets / total_targets) * 100) if total_targets else 0
+
+    total_attendance = attendance_query.count()
+    present_count = attendance_query.filter_by(status='Present').count()
+    po_mapping = round((present_count / total_attendance) * 100) if total_attendance else 0
+
+    if total_targets == 0:
+        status = "No targets yet"
+    else:
+        status = "On track" if completed_targets >= pending_targets else "Needs attention"
+
+    return {
+        "co_coverage": co_coverage,
+        "po_mapping": po_mapping,
+        "status": status,
+        "completed_targets": completed_targets,
+        "pending_targets": pending_targets,
+        "total_targets": total_targets,
+        "attendance_records": total_attendance,
+        "present_records": present_count
+    }
+
+
+def collect_report_data(course_id=None):
+    if course_id:
+        courses = Course.query.filter_by(id=course_id).all()
+        students = Student.query.filter_by(course_id=course_id).all()
+        targets = MaterialTarget.query.filter_by(course_id=course_id).all()
+        assignments = Assignment.query.filter_by(course_id=course_id).all()
+        slots = TimetableSlot.query.filter_by(course_id=course_id).all()
+        attendance_records = Attendance.query.filter_by(course_id=course_id).all()
+    else:
+        courses = Course.query.all()
+        students = Student.query.all()
+        targets = MaterialTarget.query.all()
+        assignments = Assignment.query.all()
+        slots = TimetableSlot.query.all()
+        attendance_records = Attendance.query.all()
+
+    attendance_summary = []
+    for student in students:
+        total_classes = Attendance.query.filter_by(student_id=student.id, course_id=student.course_id).count()
+        present_count = Attendance.query.filter_by(student_id=student.id, course_id=student.course_id, status='Present').count()
+        percentage = round((present_count / total_classes) * 100, 1) if total_classes else 0
+        attendance_summary.append({
+            "name": student.name,
+            "roll_number": student.roll_number,
+            "course_id": student.course_id,
+            "total_classes": total_classes,
+            "present_count": present_count,
+            "percentage": percentage
+        })
+
+    return {
+        "courses": courses,
+        "students": students,
+        "targets": targets,
+        "assignments": assignments,
+        "timetable_slots": slots,
+        "attendance_summary": attendance_summary,
+        "attendance_records": attendance_records
+    }
+
+
+@app.route('/api/metrics/compliance', methods=['GET'])
+def get_compliance_metrics():
+    course_id = request.args.get('course_id')
+    if course_id:
+        try:
+            course_id = int(course_id)
+        except ValueError:
+            return jsonify({"error": "course_id must be an integer"}), 400
+
+    metrics = compute_compliance_metrics(course_id)
+    return jsonify(metrics), 200
+
+
+@app.route('/api/reports/compliance.pdf', methods=['GET'])
+def generate_compliance_report():
+    course_id = request.args.get('course_id')
+    if course_id:
+        try:
+            course_id = int(course_id)
+        except ValueError:
+            return jsonify({"error": "course_id must be an integer"}), 400
+
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
+    except Exception:
+        return jsonify({"error": "PDF generation requires reportlab. Install it and restart the backend."}), 500
+    metrics = compute_compliance_metrics(course_id)
+    data = collect_report_data(course_id)
+    student_map = {s.id: s for s in data['students']}
+    course_map = {c.id: c for c in data['courses']}
+
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=letter)
+    width, height = letter
+    x = 40
+    y = height - 40
+
+    def write_line(line):
+        nonlocal y
+        for chunk in wrap(str(line), width=95) or [""]:
+            if y < 40:
+                pdf.showPage()
+                y = height - 40
+            pdf.drawString(x, y, chunk)
+            y -= 14
+
+    write_line("ClassOps NBA/NAAC Compliance Report")
+    write_line(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    if course_id and data['courses']:
+        write_line(f"Course: {data['courses'][0].name}")
+    write_line("")
+
+    write_line("Compliance Metrics")
+    write_line(f"CO Coverage: {metrics['co_coverage']}%")
+    write_line(f"PO Mapping: {metrics['po_mapping']}%")
+    write_line(f"Status: {metrics['status']}")
+    write_line("")
+
+    write_line("Courses")
+    if data['courses']:
+        for course in data['courses']:
+            write_line(f"- {course.name} (ID: {course.id})")
+    else:
+        write_line("No courses found.")
+    write_line("")
+
+    write_line("Students")
+    if data['students']:
+        for student in data['students']:
+            course = course_map.get(student.course_id)
+            course_name = course.name if course else f"Course {student.course_id}"
+            write_line(f"- {student.name} ({student.roll_number}) | {course_name}")
+    else:
+        write_line("No students found.")
+    write_line("")
+
+    write_line("Syllabus Targets")
+    if data['targets']:
+        for target in data['targets']:
+            status = "Completed" if target.is_completed else "Pending"
+            course_name = target.course.name if target.course else ""
+            write_line(f"- {target.topic} | Due: {target.target_date} | {status} | {course_name}")
+    else:
+        write_line("No targets found.")
+    write_line("")
+
+    write_line("Attendance Summary")
+    if data['attendance_summary']:
+        for entry in data['attendance_summary']:
+            write_line(f"- {entry['name']} ({entry['roll_number']}): {entry['percentage']}% ({entry['present_count']}/{entry['total_classes']})")
+    else:
+        write_line("No attendance data found.")
+    write_line("")
+
+    write_line("Attendance Records")
+    if data['attendance_records']:
+        for record in data['attendance_records']:
+            student = student_map.get(record.student_id)
+            course = course_map.get(record.course_id)
+            student_label = f"{student.name} ({student.roll_number})" if student else f"Student {record.student_id}"
+            course_label = course.name if course else f"Course {record.course_id}"
+            write_line(f"- {record.date} | {student_label} | {course_label} | {record.status}")
+    else:
+        write_line("No attendance records found.")
+    write_line("")
+
+    write_line("Assignments")
+    if data['assignments']:
+        for assignment in data['assignments']:
+            write_line(f"- {assignment.title} (Course ID: {assignment.course_id})")
+    else:
+        write_line("No assignments found.")
+    write_line("")
+
+    write_line("Timetable")
+    if data['timetable_slots']:
+        for slot in data['timetable_slots']:
+            course_name = slot.course.name if slot.course else ""
+            write_line(f"- {slot.day} P{slot.period + 1}: {slot.subject} ({course_name})")
+    else:
+        write_line("No timetable slots found.")
+
+    pdf.save()
+    buffer.seek(0)
+
+    filename = "nba_compliance_report.pdf"
+    if course_id and data['courses']:
+        safe_name = "_".join(data['courses'][0].name.lower().split())
+        filename = f"nba_compliance_report_{safe_name}.pdf"
+
+    return send_file(
+        buffer,
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=filename
+    )
 # 5. ATTENDANCE TRACKING
 # ==========================================
 @app.route('/api/attendance', methods=['GET'])
@@ -783,6 +1049,15 @@ def update_api_key():
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
+
+
+
+
+
+
+
+
+
 
 
 

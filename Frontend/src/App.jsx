@@ -56,6 +56,55 @@ function AttendanceReport({ report, loading, onRefresh }) {
   );
 }
 
+function LandingPage({ onSignIn, isSyncing }) {
+  return (
+    <div className="app landing">
+      <header className="landing-header">
+        <div>
+          <p className="kicker">Teacher Workflow Automation</p>
+          <h1>ClassOps</h1>
+          <p className="subtitle">Keep syllabus targets, compliance metrics, and AI tools in one focused workspace.</p>
+        </div>
+        <button className="primary" onClick={onSignIn} disabled={isSyncing}>
+          {isSyncing ? "Connecting..." : "Sign in with Google"}
+        </button>
+      </header>
+
+      <section className="landing-hero">
+        <div className="card landing-copy">
+          <h2>Bring your teaching operations into one cockpit.</h2>
+          <p>Sync Google Classroom, track syllabus targets, generate NBA/NAAC reports, and run AI tools without jumping between tabs.</p>
+          <div className="landing-actions">
+            <button className="primary" onClick={onSignIn} disabled={isSyncing}>
+              {isSyncing ? "Connecting..." : "Continue with Google"}
+            </button>
+            <p className="landing-note">We only request Classroom data needed for your dashboard.</p>
+          </div>
+        </div>
+        <div className="card landing-preview">
+          <h3>NBA/NAAC Reports</h3>
+          <p>We provide well-documented NBA/NAAC reports with CO/PO mapping and compliance-ready exports.</p>
+        </div>
+      </section>
+
+      <section className="landing-grid">
+        <div className="card">
+          <h3>Syllabus Targets</h3>
+          <p>Plan unit coverage, assign due dates, and mark completion in one place.</p>
+        </div>
+        <div className="card">
+          <h3>Compliance Exports</h3>
+          <p>Generate NBA/NAAC-ready reports with CO/PO mapping snapshots.</p>
+        </div>
+        <div className="card">
+          <h3>AI Tools & Attendance</h3>
+          <p>Check submissions, generate question papers, and keep attendance in sync.</p>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("overview");
   const [courses, setCourses] = useState([]);
@@ -82,6 +131,18 @@ export default function App() {
   const [analysisData, setAnalysisData] = useState(null);
   const [customApiKey, setCustomApiKey] = useState("");
   const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [targets, setTargets] = useState([]);
+  const [targetsLoading, setTargetsLoading] = useState(false);
+  const [targetsError, setTargetsError] = useState("");
+  const [showTargetForm, setShowTargetForm] = useState(false);
+  const [targetTopic, setTargetTopic] = useState("");
+  const [targetDate, setTargetDate] = useState("");
+  const [isSavingTarget, setIsSavingTarget] = useState(false);
+  const [complianceMessage, setComplianceMessage] = useState("");
+  const [complianceMetrics, setComplianceMetrics] = useState({ coCoverage: 0, poMapping: 0, status: "" });
+  const [metricsLoading, setMetricsLoading] = useState(false);
+  const [metricsError, setMetricsError] = useState("");
 
   const API_BASE = "http://localhost:5000";
 
@@ -201,6 +262,156 @@ export default function App() {
     }
   };
 
+  const formatTargetDate = (dateStr) => {
+    if (!dateStr) return "";
+    const date = new Date(`${dateStr}T00:00:00`);
+    if (Number.isNaN(date.getTime())) return dateStr;
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
+
+  const fetchTargets = async (courseId) => {
+    setTargetsError("");
+    if (!courseId) {
+      setTargets([]);
+      return;
+    }
+    setTargetsLoading(true);
+    setTargetsError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/targets?course_id=${courseId}`, { credentials: "include" });
+      const data = await res.json();
+      if (res.ok) {
+        setTargets(Array.isArray(data) ? data : []);
+      } else {
+        setTargets([]);
+        setTargetsError(data?.error || "Failed to load targets.");
+      }
+    } catch (err) {
+      console.error("Failed to fetch targets", err);
+      setTargetsError("Failed to load targets.");
+      setTargets([]);
+    } finally {
+      setTargetsLoading(false);
+    }
+  };
+  const fetchComplianceMetrics = async (courseId) => {
+    setMetricsError("");
+    setMetricsLoading(true);
+    try {
+      const query = courseId ? `?course_id=${courseId}` : "";
+      const res = await fetch(`${API_BASE}/api/metrics/compliance${query}`, { credentials: "include" });
+      const data = await res.json();
+      if (res.ok) {
+        setComplianceMetrics({
+          coCoverage: data.co_coverage ?? 0,
+          poMapping: data.po_mapping ?? 0,
+          status: data.status || ""
+        });
+      } else {
+        setMetricsError(data?.error || "Failed to load compliance metrics.");
+      }
+    } catch (err) {
+      console.error("Failed to fetch compliance metrics", err);
+      setMetricsError("Failed to load compliance metrics.");
+    } finally {
+      setMetricsLoading(false);
+    }
+  };
+  const handleAddTarget = async () => {
+    if (!selectedCourseId) {
+      alert("Please select a subject first.");
+      return;
+    }
+    if (!targetTopic || !targetDate) {
+      alert("Please enter a topic and due date.");
+      return;
+    }
+    setIsSavingTarget(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/targets`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          topic: targetTopic.trim(),
+          date: targetDate,
+          course_id: parseInt(selectedCourseId)
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to add target.");
+      }
+      setTargetTopic("");
+      setTargetDate("");
+      setShowTargetForm(false);
+      fetchTargets(selectedCourseId);
+    } catch (err) {
+      console.error("Add target error:", err);
+      alert(err?.message || "Could not add target.");
+    } finally {
+      setIsSavingTarget(false);
+    }
+  };
+
+  const toggleTargetStatus = async (targetId, completed) => {
+    setIsSavingTarget(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/targets/${targetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ completed })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to update target.");
+      }
+      setTargets((prev) => prev.map((t) => (t.id === targetId ? { ...t, completed: data.completed } : t)));
+    } catch (err) {
+      console.error("Update target error:", err);
+      alert(err?.message || "Could not update target.");
+    } finally {
+      setIsSavingTarget(false);
+    }
+  };
+
+  const downloadBlob = (blob, filename) => {
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const generateComplianceReport = async () => {
+    setComplianceMessage("");
+    try {
+      const query = selectedCourseId ? `?course_id=${selectedCourseId}` : "";
+      const res = await fetch(`${API_BASE}/api/reports/compliance.pdf${query}`, {
+        credentials: "include"
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error || "Failed to generate report.");
+      }
+      const blob = await res.blob();
+      const course = courses.find((c) => c.id.toString() === selectedCourseId);
+      const today = new Date().toISOString().split("T")[0];
+      const safeCourse = (course?.name || "all_courses").replace(/[^a-z0-9]+/gi, "_").toLowerCase();
+      const filename = `nba_compliance_report_${safeCourse}_${today}.pdf`;
+      downloadBlob(blob, filename);
+      setComplianceMessage("Compliance report downloaded.");
+      setTimeout(() => setComplianceMessage(""), 3000);
+    } catch (err) {
+      console.error("Compliance report error:", err);
+      setComplianceMessage(err?.message || "Failed to generate report.");
+    }
+  };
+
   const fetchUser = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/me`, { credentials: "include" });
@@ -212,6 +423,8 @@ export default function App() {
       }
     } catch (err) {
       console.error("Failed to fetch user session", err);
+    } finally {
+      setAuthChecked(true);
     }
   };
 
@@ -341,6 +554,19 @@ export default function App() {
       fetchReport();
     }
   }, [selectedCourseId]);
+  useEffect(() => {
+    if (!user) {
+      setTargets([]);
+      setComplianceMetrics({ coCoverage: 0, poMapping: 0, status: "" });
+      return;
+    }
+    if (selectedCourseId) {
+      fetchTargets(selectedCourseId);
+      fetchComplianceMetrics(selectedCourseId);
+    } else {
+      fetchComplianceMetrics("");
+    }
+  }, [selectedCourseId, user]);
 
   useEffect(() => {
     if (selectedCourseId && attendanceDate) {
@@ -463,6 +689,17 @@ export default function App() {
     }
   };
 
+  if (!authChecked) {
+    return (
+      <div className="app">
+        <div className="placeholder">Checking your session...</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LandingPage onSignIn={handleSignIn} isSyncing={isSyncing} />;
+  }
   return (
     <div className="app">
       <header className="header">
@@ -514,17 +751,77 @@ export default function App() {
                 <p>Track progress by unit and upcoming deadlines.</p>
               </div>
               <div className="card-body">
-                <ul className="list">
-                  <li>
-                    <span>Unit 1: Data Structures</span>
-                    <span className="status success">Completed</span>
-                  </li>
-                  <li>
-                    <span>Unit 2: Algorithms</span>
-                    <span className="status warn">Pending (Due: Oct 12)</span>
-                  </li>
-                </ul>
-                <button className="ghost">+ Add Syllabus Target</button>
+                <div className="input-row">
+                  <select
+                    value={selectedCourseId}
+                    onChange={(e) => setSelectedCourseId(e.target.value)}
+                  >
+                    <option value="">Select Subject</option>
+                    {courses.map((course) => (
+                      <option key={course.id} value={course.id}>{course.name}</option>
+                    ))}
+                  </select>
+                  <button
+                    className="ghost"
+                    onClick={() => setShowTargetForm((prev) => !prev)}
+                    disabled={!selectedCourseId}
+                  >
+                    {showTargetForm ? "Close" : "+ Add Syllabus Target"}
+                  </button>
+                </div>
+
+                {showTargetForm && (
+                  <div className="target-form">
+                    <input
+                      placeholder="Enter unit or topic (e.g., Unit 3: Databases)"
+                      value={targetTopic}
+                      onChange={(e) => setTargetTopic(e.target.value)}
+                    />
+                    <input
+                      type="date"
+                      value={targetDate}
+                      onChange={(e) => setTargetDate(e.target.value)}
+                    />
+                    <button className="primary" onClick={handleAddTarget} disabled={isSavingTarget}>
+                      {isSavingTarget ? "Adding..." : "Add Target"}
+                    </button>
+                    <button className="ghost" onClick={() => setShowTargetForm(false)} disabled={isSavingTarget}>
+                      Cancel
+                    </button>
+                  </div>
+                )}
+
+                {targetsLoading ? (
+                  <p>Loading syllabus targets...</p>
+                ) : targets.length > 0 ? (
+                  <ul className="list">
+                    {targets.map((target) => (
+                      <li key={target.id}>
+                        <div className="target-info">
+                          <span>{target.topic}</span>
+                          {target.course_name && <span className="target-course">{target.course_name}</span>}
+                        </div>
+                        <div className="target-actions">
+                          <button
+                            className={`status-pill ${target.completed ? "completed" : "pending"}`}
+                            onClick={() => toggleTargetStatus(target.id, !target.completed)}
+                            disabled={isSavingTarget}
+                          >
+                            {target.completed
+                              ? "Completed"
+                              : `Pending${target.date ? ` (Due: ${formatTargetDate(target.date)})` : ""}`}
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="placeholder">
+                    {selectedCourseId ? "No targets added yet. Add a syllabus target to get started." : "Select a subject to view syllabus targets."}
+                  </div>
+                )}
+
+                {targetsError && <p className="hint" style={{ color: "#c53030" }}>{targetsError}</p>}
               </div>
             </div>
 
@@ -537,14 +834,21 @@ export default function App() {
                 <div className="metric-grid">
                   <div>
                     <p className="metric-label">CO Coverage</p>
-                    <p className="metric-value">84%</p>
+                    <p className="metric-value">{complianceMetrics.coCoverage}%</p>
                   </div>
                   <div>
                     <p className="metric-label">PO Mapping</p>
-                    <p className="metric-value">92%</p>
+                    <p className="metric-value">{complianceMetrics.poMapping}%</p>
                   </div>
                 </div>
-                <button className="primary full">Generate NBA Compliance Report</button>
+                {metricsLoading && <p className="hint">Analyzing metrics...</p>}
+                {metricsError && <p className="hint" style={{ color: "#c53030" }}>{metricsError}</p>}
+                {complianceMetrics.status && <p className="hint">Status: {complianceMetrics.status}</p>}
+                <p className="hint">Based on completed syllabus targets and attendance records.</p>
+                <button className="primary full" onClick={generateComplianceReport}>
+                  Generate NBA Compliance Report
+                </button>
+                {complianceMessage && <p className="hint">{complianceMessage}</p>}
               </div>
             </div>
 
@@ -852,3 +1156,29 @@ export default function App() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

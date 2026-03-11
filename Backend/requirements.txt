@@ -19,4 +19,5 @@ scikit-learn
 transformers
 torch
 torchvision
-torchaudio
+torchaudioreportlab
+reportlab

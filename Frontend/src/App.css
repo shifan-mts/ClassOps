@@ -314,3 +314,144 @@ input[type="file"] {
   border: 1px solid #cdd8e3;
   background: #ffffff;
 }
+
+
+.landing {
+  display: grid;
+  gap: 28px;
+}
+
+.landing-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.landing-hero {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.landing-copy h2 {
+  margin: 0 0 10px;
+  font-size: clamp(1.4rem, 2.4vw, 1.8rem);
+}
+
+.landing-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.landing-note {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.landing-preview {
+  display: grid;
+  gap: 12px;
+}
+
+.landing-metric {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  font-weight: 700;
+}
+
+.landing-metric span {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #64748b;
+}
+
+.landing-metric strong {
+  font-size: 1.2rem;
+  color: #0f172a;
+}
+
+.landing-list {
+  display: grid;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: #475569;
+}
+
+.landing-grid {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.target-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.target-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.target-course {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.target-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-pill {
+  border: 1px solid #dbe6f2;
+  background: #ffffff;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.status-pill.completed {
+  background: #def7ec;
+  color: #0f8a5f;
+  border-color: #b7ecd5;
+}
+
+.status-pill.pending {
+  background: #fff7ed;
+  color: #b45309;
+  border-color: #fed7aa;
+}
+
+.status-pill:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.hint {
+  font-size: 0.85rem;
+  color: #64748b;
+  margin: 0;
+}
+
+@media (max-width: 900px) {
+  .landing-header {
+    align-items: flex-start;
+  }
+}
+
