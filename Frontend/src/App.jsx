@@ -158,7 +158,7 @@ export default function App() {
   }, [selectedCourseId]);
 
   const updateServerKey = async () => {
-    if (!customApiKey) {
+    if (!customApiKey.trim()) {
       alert("Please enter a key first.");
       return;
     }
@@ -166,7 +166,7 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/config/update-key`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_key: customApiKey })
+        body: JSON.stringify({ api_key: customApiKey.trim() })
       });
       const data = await res.json();
       if (res.ok) {
@@ -530,7 +530,7 @@ export default function App() {
       }
       const data = await res.json();
       if (res.ok) {
-        setCourses(Array.isArray(data.courses) ? data.courses : []);
+        await fetchCourses();
         alert("Courses synced successfully!");
       } else {
         setSyncError(data.error || "Sync failed");
@@ -633,19 +633,20 @@ export default function App() {
     const courseName = selectedCourse ? selectedCourse.name : "General Course";
 
     try {
+      const payload = { topic: qPaperTopic, difficulty: "Medium", course_name: courseName };
+      const trimmedKey = customApiKey.trim();
+      if (trimmedKey) {
+        payload.api_key = trimmedKey;
+      }
       const res = await fetch(`${API_BASE}/api/question-paper/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          topic: qPaperTopic, 
-          difficulty: "Medium",
-          course_name: courseName,
-          api_key: customApiKey
-        })
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
       if (!res.ok) {
-        if (res.status === 429 || (data.error && data.error.toLowerCase().includes("quota"))) {
+        const errText = (data?.error || "").toLowerCase();
+        if (res.status === 429 || res.status === 401 || errText.includes("quota") || errText.includes("api key") || errText.includes("invalid")) {
           setIsQuotaExceeded(true);
         }
         throw new Error(data?.error || `Request failed with status ${res.status}`);
@@ -653,6 +654,7 @@ export default function App() {
       const content = data?.question_paper || data?.questionPaper || "No question paper returned.";
       setGeneratedPaper(content);
       setError("");
+      setIsQuotaExceeded(false);
     } catch (err) {
       setError(err?.message || "Could not generate the question paper.");
     } finally {
@@ -969,7 +971,7 @@ export default function App() {
                     <input
                       style={{ flex: 1 }}
                       type="password"
-                      placeholder="Enter OpenAI API Key (Required: Server credits low)"
+                      placeholder="Enter Gemini API Key (Required: Server credits low)"
                       value={customApiKey}
                       onChange={(e) => setCustomApiKey(e.target.value)}
                     />
@@ -1002,7 +1004,7 @@ export default function App() {
                     <p className="error" style={{ margin: 0, color: '#c53030' }}>⚠️ {error}</p>
                     {isQuotaExceeded && (
                       <p style={{ fontSize: '13px', marginTop: '8px', color: '#742a2a' }}>
-                        <b>Action Required:</b> Please enter your own OpenAI API Key in the box above to continue.
+                        <b>Action Required:</b> Please enter your own Gemini API Key in the box above to continue.
                       </p>
                     )}
                   </div>

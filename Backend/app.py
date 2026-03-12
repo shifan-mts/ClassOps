@@ -13,13 +13,23 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 import io
 import difflib
-from openai import OpenAI
+from google import genai
 from datetime import datetime, timezone
 from io import BytesIO
 from textwrap import wrap
 from ai_checker import handle_upload, analyze_text, extract_text_from_file
 
 load_dotenv()
+
+def normalize_api_key(value):
+    if not value:
+        return None
+    cleaned = str(value).strip()
+    if (cleaned.startswith('\"') and cleaned.endswith('\"')) or (cleaned.startswith("'") and cleaned.endswith("'")):
+        cleaned = cleaned[1:-1].strip()
+    cleaned = cleaned.strip()
+    return cleaned if cleaned else None
+
 
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'super_secret_dev_key')
@@ -47,7 +57,8 @@ db.init_app(app)
 # ==========================================
 # API KEYS (To be filled in .env file)
 # ==========================================
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+GEMINI_API_KEY = normalize_api_key(os.getenv('GEMINI_API_KEY'))
+GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
 CLIENT_SECRETS_FILE = "client_secret.json" # Download from Google Cloud Console
 SCOPES = [
     'https://www.googleapis.com/auth/classroom.courses.readonly', 
@@ -260,12 +271,22 @@ def sync_classroom():
     if 'credentials' not in session:
         return jsonify({"error": "Not authenticated"}), 401
     
-    courses = sync_classroom_data(session['credentials'])
-    return jsonify({"message": "Classroom synced successfully", "courses": courses})
+    sync_classroom_data(session['credentials'])
+    email = session.get('user', {}).get('email')
+    teacher = Teacher.query.filter_by(email=email).first() if email else None
+    courses = Course.query.filter_by(teacher_id=teacher.id).all() if teacher else []
+    return jsonify({
+        "message": "Classroom synced successfully",
+        "courses": [{"id": c.id, "google_course_id": c.google_course_id, "name": c.name} for c in courses]
+    })
 
 @app.route('/api/courses', methods=['GET'])
 def get_courses():
-    courses = Course.query.all()
+    if 'user' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+    email = session.get('user', {}).get('email')
+    teacher = Teacher.query.filter_by(email=email).first() if email else None
+    courses = Course.query.filter_by(teacher_id=teacher.id).all() if teacher else []
     return jsonify([{"id": c.id, "google_course_id": c.google_course_id, "name": c.name} for c in courses])
 
 @app.route('/api/courses/<int:course_id>/sync-assignments', methods=['POST'])
@@ -410,7 +431,7 @@ def analyze_submissions(assignment_id):
             })
             
             # For specific red alerts
-            if "❌" in p['status']:
+            if "?" in p['status']:
                 formatted_alerts.append({
                     "students": [p['name'], p['matched_with']],
                     "score": p['highest_match_percent']
@@ -433,17 +454,18 @@ def analyze_submissions(assignment_id):
 # ==========================================
 @app.route('/api/question-paper/generate', methods=['POST'])
 def generate_question_paper():
-    data = request.json
+    data = request.get_json(silent=True) or {}
     topic = data.get('topic')
     difficulty = data.get('difficulty', 'Medium')
     course_name = data.get('course_name', 'General Course')
     
     # Use key from request if provided, otherwise fallback to server env
-    custom_key = data.get('api_key')
-    effective_key = custom_key if custom_key else OPENAI_API_KEY
+    custom_key = normalize_api_key(data.get('api_key'))
+    env_key = normalize_api_key(GEMINI_API_KEY) or normalize_api_key(os.getenv('GEMINI_API_KEY'))
+    effective_key = custom_key if custom_key else env_key
 
     if not effective_key:
-        return jsonify({"error": "OpenAI API key is missing. Please provide one in the input box below."}), 400
+        return jsonify({"error": "Gemini API key is missing. Please provide one in the input box below."}), 400
 
     prompt = f"""Generate a university-level question paper for the course '{course_name}' on the topic '{topic}' with a '{difficulty}' difficulty. 
     The question paper MUST strictly follow Bloom's Taxonomy and include Course Outcome (CO) mapping for each question.
@@ -458,28 +480,36 @@ def generate_question_paper():
     """
 
     try:
-        client = OpenAI(api_key=effective_key)
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are an expert university professor."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7
+        client = genai.Client(api_key=effective_key)
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config={"temperature": 0.7}
         )
         content = ""
-        if response.choices:
-            content = response.choices[0].message.content
+        if response is not None:
+            content = getattr(response, "text", "") or ""
         return jsonify({"question_paper": content})
     except Exception as exc:
         app.logger.exception("Failed to generate question paper: %s", exc)
         error_msg = str(exc)
-        if "insufficient_quota" in error_msg:
+        status_code = getattr(exc, "status_code", None) or getattr(exc, "status", None)
+        if status_code is None:
+            if "Error code: 401" in error_msg or "UNAUTHENTICATED" in error_msg or "API key" in error_msg or "permission" in error_msg.lower():
+                status_code = 401
+            elif "RESOURCE_EXHAUSTED" in error_msg or "quota" in error_msg.lower():
+                status_code = 429
+        if status_code == 401:
             return jsonify({
-                "error": "OpenAI API quota exhausted. Please check your billing details or plan at platform.openai.com.",
+                "error": "Invalid Gemini API key. Please update your key and try again.",
+                "details": error_msg
+            }), 401
+        if status_code == 429 or "RESOURCE_EXHAUSTED" in error_msg or "quota" in error_msg.lower():
+            return jsonify({
+                "error": "Gemini API quota exhausted. Please check your Google AI Studio billing and quota settings.",
                 "details": error_msg
             }), 429
-        return jsonify({"error": "Failed to generate question paper.", "details": error_msg}), 500
+        return jsonify({"error": "Failed to generate question paper.", "details": error_msg}), status_code or 500
 
 
 # ==========================================
@@ -1008,7 +1038,7 @@ def get_timetable():
 @app.route('/api/config/update-key', methods=['POST'])
 def update_api_key():
     data = request.json
-    new_key = data.get('api_key')
+    new_key = normalize_api_key(data.get('api_key'))
     if not new_key:
         return jsonify({"error": "No API key provided"}), 400
 
@@ -1020,27 +1050,27 @@ def update_api_key():
             with open(env_path, 'r') as f:
                 lines = f.readlines()
 
-        # Update or add OPENAI_API_KEY
+        # Update or add GEMINI_API_KEY
         key_found = False
         new_lines = []
         for line in lines:
-            if line.startswith('OPENAI_API_KEY='):
-                new_lines.append(f'OPENAI_API_KEY={new_key}\n')
+            if line.startswith('GEMINI_API_KEY='):
+                new_lines.append(f'GEMINI_API_KEY={new_key}\n')
                 key_found = True
             else:
                 new_lines.append(line)
         
         if not key_found:
-            new_lines.append(f'OPENAI_API_KEY={new_key}\n')
+            new_lines.append(f'GEMINI_API_KEY={new_key}\n')
 
         # Write back to .env
         with open(env_path, 'w') as f:
             f.writelines(new_lines)
 
         # Update current process variable
-        global OPENAI_API_KEY
-        OPENAI_API_KEY = new_key
-        os.environ['OPENAI_API_KEY'] = new_key
+        global GEMINI_API_KEY
+        GEMINI_API_KEY = new_key
+        os.environ['GEMINI_API_KEY'] = new_key
 
         return jsonify({"message": "API Key updated successfully in .env and server memory."})
     except Exception as e:
@@ -1049,6 +1079,7 @@ def update_api_key():
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
+
 
 
 

@@ -6,7 +6,6 @@ google-auth-httplib2
 google-auth-oauthlib
 requests
 python-dotenv
-openai
 langsmith
 langchain
 langchain-community
@@ -19,5 +18,8 @@ scikit-learn
 transformers
 torch
 torchvision
-torchaudioreportlab
+
+reportlab
+google-genai
+torchaudio
 reportlab
