@@ -839,7 +839,7 @@ def get_attendance_report(course_id):
         
     return jsonify(report), 200
 
-@app.route('/api/courses/<int:course_id>/sync-students', methods=['POST'])
+@app.route('/api/courses/<course_id>/sync-students', methods=['POST'])
 def sync_students_for_course(course_id):
     service = get_classroom_service()
     if not service:
