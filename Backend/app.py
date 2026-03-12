@@ -10,12 +10,18 @@ from dotenv import load_dotenv
 import google.oauth2.credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 import io
 import difflib
+import json
 from google import genai
+from google.genai import types
 from datetime import datetime, timezone
 from io import BytesIO
+from docx import Document
+from docx.shared import Pt
+from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+from docx.enum.table import WD_TABLE_ALIGNMENT
 from textwrap import wrap
 from ai_checker import handle_upload, analyze_text, extract_text_from_file
 
@@ -30,6 +36,244 @@ def normalize_api_key(value):
     cleaned = cleaned.strip()
     return cleaned if cleaned else None
 
+
+
+def get_qp_header(data, course_name):
+    return {
+        "college_name": data.get('college_name') or os.getenv('QP_COLLEGE_NAME', 'COLLEGE NAME'),
+        "college_address": data.get('college_address') or os.getenv('QP_COLLEGE_ADDRESS', ''),
+        "affiliation": data.get('affiliation') or os.getenv('QP_AFFILIATION', ''),
+        "academic_year": data.get('academic_year') or os.getenv('QP_ACADEMIC_YEAR', ''),
+        "assessment": data.get('assessment') or os.getenv('QP_ASSESSMENT', 'Assessment Test - II'),
+        "course_code": data.get('course_code') or os.getenv('QP_COURSE_CODE', ''),
+        "course_title": data.get('course_title') or course_name,
+        "date": data.get('date') or os.getenv('QP_DATE', datetime.now().strftime('%d/%m/%Y')),
+        "time": data.get('time') or os.getenv('QP_TIME', ''),
+        "max_marks": data.get('max_marks') or os.getenv('QP_MAX_MARKS', '')
+    }
+
+
+def build_qp_prompt(topic, course_name, difficulty, part_a_count, part_b_count, part_c_count):
+    return f"""Generate a university assessment question paper.
+Return ONLY a JSON object matching the response schema. No extra text.
+
+Rules:
+- Part A: {part_a_count} short questions (2 marks each).
+- Part B: {part_b_count} long questions (16 marks each) with OR alternatives.
+- Part C: {part_c_count} long questions (8 marks each) with OR alternatives.
+- Keep each question under 20 words.
+- Use CO1-CO5 and K1-K6.
+
+Topic: {topic}. Course: {course_name}. Difficulty: {difficulty}.
+"""
+
+
+def get_qp_schema(part_a_count, part_b_count, part_c_count):
+    part_a_item = {
+        "type": "object",
+        "required": ["question", "co", "bloom"],
+        "properties": {
+            "question": {"type": "string"},
+            "co": {"type": "string"},
+            "bloom": {"type": "string"}
+        }
+    }
+    part_b_item = {
+        "type": "object",
+        "required": ["question", "co", "bloom", "or_question", "or_co", "or_bloom"],
+        "properties": {
+            "question": {"type": "string"},
+            "co": {"type": "string"},
+            "bloom": {"type": "string"},
+            "or_question": {"type": "string"},
+            "or_co": {"type": "string"},
+            "or_bloom": {"type": "string"}
+        }
+    }
+    part_c_item = {
+        "type": "object",
+        "required": ["question", "co", "bloom", "or_question", "or_co", "or_bloom"],
+        "properties": {
+            "question": {"type": "string"},
+            "co": {"type": "string"},
+            "bloom": {"type": "string"},
+            "or_question": {"type": "string"},
+            "or_co": {"type": "string"},
+            "or_bloom": {"type": "string"}
+        }
+    }
+    return {
+        "type": "object",
+        "required": ["part_a", "part_b", "part_c"],
+        "properties": {
+            "part_a": {"type": "array", "items": part_a_item, "minItems": part_a_count, "maxItems": part_a_count},
+            "part_b": {"type": "array", "items": part_b_item, "minItems": part_b_count, "maxItems": part_b_count},
+            "part_c": {"type": "array", "items": part_c_item, "minItems": part_c_count, "maxItems": part_c_count}
+        }
+    }
+
+
+def parse_qp_json(text):
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+
+
+def normalize_qp(qp, part_a_count, part_b_count, part_c_count):
+    if not isinstance(qp, dict):
+        return None
+    part_a = qp.get('part_a') or []
+    part_b = qp.get('part_b') or []
+    part_c = qp.get('part_c') or []
+
+    if len(part_a) < part_a_count or len(part_b) < part_b_count or len(part_c) < part_c_count:
+        return None
+
+    qp['part_a'] = part_a[:part_a_count]
+    qp['part_b'] = part_b[:part_b_count]
+    qp['part_c'] = part_c[:part_c_count]
+    return qp
+
+
+def render_qp_text(qp, part_a_count, part_b_count, part_c_count):
+    lines = []
+    part_a = qp.get('part_a', [])
+    part_b = qp.get('part_b', [])
+    part_c = qp.get('part_c', [])
+
+    lines.append(f"PART - A ({part_a_count} x 2 = {part_a_count * 2} marks)")
+    lines.append("Answer all the Questions")
+    for idx, q in enumerate(part_a, start=1):
+        lines.append(f"{idx}. {q.get('question', '')} (CO: {q.get('co', '')}, {q.get('bloom', '')})")
+
+    lines.append(f"\nPART - B (2 x 16 = 32 marks)")
+    for i, q in enumerate(part_b, start=1):
+        no = part_a_count + i
+        lines.append(f"{no}(a). {q.get('question', '')} (CO: {q.get('co', '')}, {q.get('bloom', '')})")
+        lines.append("OR")
+        lines.append(f"{no}(b). {q.get('or_question', '')} (CO: {q.get('or_co', '')}, {q.get('or_bloom', '')})")
+
+    lines.append(f"\nPART - C (1 x 8 = 8 marks)")
+    for i, q in enumerate(part_c, start=1):
+        no = part_a_count + part_b_count + i
+        lines.append(f"{no}(a). {q.get('question', '')} (CO: {q.get('co', '')}, {q.get('bloom', '')})")
+        lines.append("OR")
+        lines.append(f"{no}(b). {q.get('or_question', '')} (CO: {q.get('or_co', '')}, {q.get('or_bloom', '')})")
+
+    return "".join(lines)
+
+
+def build_question_paper_docx(header, qp, part_a_count, part_b_count, part_c_count):
+    doc = Document()
+    style = doc.styles['Normal']
+    style.font.name = 'Times New Roman'
+    style.font.size = Pt(11)
+
+    reg = doc.add_paragraph()
+    reg.add_run("Reg.No.: ").bold = True
+    reg.add_run("____________________")
+
+    def add_center_line(text, bold=False):
+        if not text:
+            return
+        p = doc.add_paragraph()
+        p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+        run = p.add_run(text)
+        run.bold = bold
+
+    college_line = header.get('college_name')
+    if header.get('college_address'):
+        college_line = f"{college_line}, {header.get('college_address')}".strip(', ')
+    add_center_line(college_line, bold=True)
+    add_center_line(header.get('affiliation'))
+    add_center_line(header.get('academic_year'))
+    add_center_line(header.get('assessment'), bold=True)
+
+    course_code = header.get('course_code')
+    course_title = header.get('course_title')
+    if course_code and course_title:
+        add_center_line(f"{course_code} - {course_title}", bold=True)
+    else:
+        add_center_line(course_title, bold=True)
+
+    table = doc.add_table(rows=1, cols=2)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    left = table.rows[0].cells[0]
+    right = table.rows[0].cells[1]
+    left.text = f"Time: {header.get('time') or '__________'}"
+    right.text = f"Date: {header.get('date') or '__________'}"
+
+    max_marks = header.get('max_marks')
+    if max_marks:
+        p = doc.add_paragraph()
+        p.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
+        p.add_run(f"Max. Marks: {max_marks}")
+
+    def add_part(title, instruction, questions, start_no, with_or):
+        p = doc.add_paragraph()
+        p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+        p.add_run(title).bold = True
+        if instruction:
+            p2 = doc.add_paragraph()
+            p2.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+            p2.add_run(instruction)
+
+        t = doc.add_table(rows=1, cols=4)
+        t.style = 'Table Grid'
+        t.alignment = WD_TABLE_ALIGNMENT.CENTER
+        hdr = t.rows[0].cells
+        hdr[0].text = "S.No."
+        hdr[1].text = "Questions"
+        hdr[2].text = "Course Outcome"
+        hdr[3].text = "Bloom's Taxonomy level"
+
+        for i, q in enumerate(questions, start=0):
+            no = start_no + i
+            if with_or:
+                row_a = t.add_row().cells
+                row_a[0].text = f"{no}(a)"
+                row_a[1].text = q.get('question', '')
+                row_a[2].text = q.get('co', '')
+                row_a[3].text = q.get('bloom', '')
+
+                or_row = t.add_row().cells
+                or_row[1].text = "OR"
+                or_row[1].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+
+                row_b = t.add_row().cells
+                row_b[0].text = f"{no}(b)"
+                row_b[1].text = q.get('or_question', '')
+                row_b[2].text = q.get('or_co', '')
+                row_b[3].text = q.get('or_bloom', '')
+            else:
+                row = t.add_row().cells
+                row[0].text = str(no)
+                row[1].text = q.get('question', '')
+                row[2].text = q.get('co', '')
+                row[3].text = q.get('bloom', '')
+
+    part_a = qp.get('part_a', [])
+    part_b = qp.get('part_b', [])
+    part_c = qp.get('part_c', [])
+
+    add_part(f"PART - A ({part_a_count} x 2 = {part_a_count * 2} marks)", "Answer all the Questions", part_a, 1, False)
+    add_part("PART - B (2 x 16 = 32 marks)", None, part_b, part_a_count + 1, True)
+    add_part("PART - C (1 x 8 = 8 marks)", None, part_c, part_a_count + part_b_count + 1, True)
+
+    out = BytesIO()
+    doc.save(out)
+    out.seek(0)
+    return out
+
+
+def get_drive_service(credentials_dict=None):
+    if credentials_dict is None:
+        credentials_dict = session.get('credentials')
+    if not credentials_dict:
+        return None
+    creds = google.oauth2.credentials.Credentials(**credentials_dict)
+    return build('drive', 'v3', credentials=creds)
 
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'super_secret_dev_key')
@@ -58,7 +302,7 @@ db.init_app(app)
 # API KEYS (To be filled in .env file)
 # ==========================================
 GEMINI_API_KEY = normalize_api_key(os.getenv('GEMINI_API_KEY'))
-GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
+GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash-lite')
 CLIENT_SECRETS_FILE = "client_secret.json" # Download from Google Cloud Console
 SCOPES = [
     'https://www.googleapis.com/auth/classroom.courses.readonly', 
@@ -66,7 +310,8 @@ SCOPES = [
     'https://www.googleapis.com/auth/classroom.student-submissions.students.readonly',
     'openid',
     'https://www.googleapis.com/auth/userinfo.email',
-    'https://www.googleapis.com/auth/userinfo.profile'
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/drive.file'
 ]
 GOOGLE_REDIRECT_URI = "http://localhost:5000/api/auth/google/callback"
 
@@ -455,10 +700,21 @@ def analyze_submissions(assignment_id):
 @app.route('/api/question-paper/generate', methods=['POST'])
 def generate_question_paper():
     data = request.get_json(silent=True) or {}
-    topic = data.get('topic')
+    topic = (data.get('topic') or '').strip()
+    if not topic:
+        return jsonify({"error": "topic is required"}), 400
+
     difficulty = data.get('difficulty', 'Medium')
     course_name = data.get('course_name', 'General Course')
-    
+    output = data.get('output', 'text')
+
+    part_a_count = 5
+    part_b_count = 2
+    part_c_count = 1
+
+
+    header = get_qp_header(data, course_name)
+
     # Use key from request if provided, otherwise fallback to server env
     custom_key = normalize_api_key(data.get('api_key'))
     env_key = normalize_api_key(GEMINI_API_KEY) or normalize_api_key(os.getenv('GEMINI_API_KEY'))
@@ -467,29 +723,50 @@ def generate_question_paper():
     if not effective_key:
         return jsonify({"error": "Gemini API key is missing. Please provide one in the input box below."}), 400
 
-    prompt = f"""Generate a university-level question paper for the course '{course_name}' on the topic '{topic}' with a '{difficulty}' difficulty. 
-    The question paper MUST strictly follow Bloom's Taxonomy and include Course Outcome (CO) mapping for each question.
-    
-    Structure:
-    Part A (Remember & Understand - L1/L2): 5 short questions (2 marks each). Map to CO1/CO2.
-    Part B (Apply & Analyze - L3/L4): 3 medium questions (5 marks each). Map to CO3/CO4.
-    Part C (Evaluate & Create - L5/L6): 2 essay questions (10 marks each). Map to CO5/CO6.
-
-    For each question, indicate the Bloom's Level (e.g., L1) and the mapped CO (e.g., CO1).
-    Format the output clearly with headings and a table-like structure if possible.
-    """
+    prompt = build_qp_prompt(topic, course_name, difficulty, part_a_count, part_b_count, part_c_count)
 
     try:
         client = genai.Client(api_key=effective_key)
         response = client.models.generate_content(
             model=GEMINI_MODEL,
             contents=prompt,
-            config={"temperature": 0.7}
+            config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=900, response_mime_type="application/json", response_schema=get_qp_schema(part_a_count, part_b_count, part_c_count))
         )
-        content = ""
+        raw_text = ""
         if response is not None:
-            content = getattr(response, "text", "") or ""
-        return jsonify({"question_paper": content})
+            raw_text = getattr(response, "text", "") or ""
+
+        qp = getattr(response, "parsed", None)
+        if not qp:
+            qp = parse_qp_json(raw_text)
+        qp = normalize_qp(qp, part_a_count, part_b_count, part_c_count)
+        if not qp:
+            if output == 'text':
+                return jsonify({"question_paper": raw_text})
+            return jsonify({"error": "Failed to parse structured question paper. Try again."}), 500
+
+        if output == 'text':
+            rendered = render_qp_text(qp, part_a_count, part_b_count, part_c_count)
+            return jsonify({"question_paper": rendered})
+
+        docx_bytes = build_question_paper_docx(header, qp, part_a_count, part_b_count, part_c_count)
+        safe_course = (course_name or 'question_paper').replace(' ', '_').replace('/', '_')
+        filename = f"question_paper_{safe_course}_{datetime.now().strftime('%Y%m%d')}.docx"
+
+        if output == 'google_doc':
+            if 'credentials' not in session:
+                return jsonify({"error": "Not authenticated with Google. Please sign in again to grant Drive access."}), 401
+            drive = get_drive_service()
+            if not drive:
+                return jsonify({"error": "Google Drive service unavailable."}), 500
+            docx_bytes.seek(0)
+            media = MediaIoBaseUpload(docx_bytes, mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document', resumable=False)
+            file_metadata = {"name": filename.replace('.docx', ''), "mimeType": "application/vnd.google-apps.document"}
+            created = drive.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
+            return jsonify({"doc_url": created.get('webViewLink'), "doc_id": created.get('id')})
+
+        return send_file(docx_bytes, as_attachment=True, download_name=filename, mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+
     except Exception as exc:
         app.logger.exception("Failed to generate question paper: %s", exc)
         error_msg = str(exc)
@@ -514,6 +791,8 @@ def generate_question_paper():
 
 # ==========================================
 # 4. MATERIAL TARGET COMPLETION
+# ==========================================
+
 # ==========================================
 @app.route('/api/targets', methods=['GET', 'POST'])
 def manage_targets():

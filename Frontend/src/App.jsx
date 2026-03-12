@@ -115,6 +115,8 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [qPaperTopic, setQPaperTopic] = useState("");
   const [generatedPaper, setGeneratedPaper] = useState("");
+  const [docLink, setDocLink] = useState("");
+  const [qpOutput, setQpOutput] = useState("google_doc");
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState("");
   const [syncError, setSyncError] = useState("");
@@ -625,6 +627,7 @@ export default function App() {
 
   const generatePaper = async () => {
     setGeneratedPaper("");
+    setDocLink("");
     setError("");
     setIsGenerating(true);
     
@@ -633,7 +636,7 @@ export default function App() {
     const courseName = selectedCourse ? selectedCourse.name : "General Course";
 
     try {
-      const payload = { topic: qPaperTopic, difficulty: "Medium", course_name: courseName };
+      const payload = { topic: qPaperTopic, difficulty: "Medium", course_name: courseName, output: qpOutput };
       const trimmedKey = customApiKey.trim();
       if (trimmedKey) {
         payload.api_key = trimmedKey;
@@ -641,18 +644,49 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/question-paper/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(payload)
       });
+
+      if (qpOutput === "docx") {
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          const errText = (data?.error || "").toLowerCase();
+          if (res.status === 429 || errText.includes("quota") || errText.includes("api key") || errText.includes("invalid")) {
+            setIsQuotaExceeded(true);
+          }
+          if (res.status === 401 && qpOutput === "google_doc") {
+          throw new Error("Please sign in again to grant Google Drive access.");
+        }
+        throw new Error(data?.error || `Request failed with status ${res.status}`);
+        }
+        const blob = await res.blob();
+        const safeCourse = (courseName || "question_paper").replace(/[^a-z0-9]+/gi, "_").toLowerCase();
+        const today = new Date().toISOString().split("T")[0];
+        downloadBlob(blob, `question_paper_${safeCourse}_${today}.docx`);
+        setIsQuotaExceeded(false);
+        setError("");
+        return;
+      }
+
       const data = await res.json();
       if (!res.ok) {
         const errText = (data?.error || "").toLowerCase();
-        if (res.status === 429 || res.status === 401 || errText.includes("quota") || errText.includes("api key") || errText.includes("invalid")) {
+        if (res.status === 429 || errText.includes("quota") || errText.includes("api key") || errText.includes("invalid")) {
           setIsQuotaExceeded(true);
         }
         throw new Error(data?.error || `Request failed with status ${res.status}`);
       }
-      const content = data?.question_paper || data?.questionPaper || "No question paper returned.";
-      setGeneratedPaper(content);
+
+      if (qpOutput === "google_doc") {
+        if (!data?.doc_url) {
+          throw new Error("No Google Doc link returned. Make sure you are signed in and Drive access is granted.");
+        }
+        setDocLink(data.doc_url);
+      } else {
+        const content = data?.question_paper || data?.questionPaper || "No question paper returned.";
+        setGeneratedPaper(content);
+      }
       setError("");
       setIsQuotaExceeded(false);
     } catch (err) {
@@ -995,6 +1029,15 @@ export default function App() {
                     value={qPaperTopic}
                     onChange={(e) => setQPaperTopic(e.target.value)}
                   />
+                  <select
+                    value={qpOutput}
+                    onChange={(e) => setQpOutput(e.target.value)}
+                    style={{ width: '180px' }}
+                  >
+                    <option value="google_doc">Google Doc</option>
+                    <option value="docx">Download DOCX</option>
+                    <option value="text">Preview Text</option>
+                  </select>
                   <button className="primary" onClick={generatePaper} disabled={!qPaperTopic || isGenerating}>
                     {isGenerating ? "Generating..." : "Generate"}
                   </button>
@@ -1007,6 +1050,11 @@ export default function App() {
                         <b>Action Required:</b> Please enter your own Gemini API Key in the box above to continue.
                       </p>
                     )}
+                  </div>
+                )}
+                {docLink && (
+                  <div className="output" style={{ marginTop: '12px' }}>
+                    <a href={docLink} target="_blank" rel="noreferrer">Open Google Doc</a>
                   </div>
                 )}
                 {generatedPaper && (
