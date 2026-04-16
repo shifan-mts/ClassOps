@@ -2,7 +2,7 @@ import os
 # 1. Force HTTP for local testing (No HTTPS needed) - Must be set BEFORE imports
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
-from flask import Flask, request, jsonify, redirect, url_for, session, send_file
+from flask import Flask, request, jsonify, redirect, url_for, session, send_file, make_response
 from flask_cors import CORS
 from flask_session import Session
 from models import db, Teacher, Course, Student, Attendance, MaterialTarget, StudentMetric, Assignment, Timetable, TimetableSlot
@@ -12,11 +12,15 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 import io
+import csv
 import difflib
 import json
+import re
+import requests
 from google import genai
 from google.genai import types
 from datetime import datetime, timezone
+from google.auth.transport.requests import Request as GoogleAuthRequest, AuthorizedSession
 from io import BytesIO
 from docx import Document
 from docx.shared import Pt
@@ -26,6 +30,222 @@ from textwrap import wrap
 from ai_checker import handle_upload, analyze_text, extract_text_from_file
 
 load_dotenv()
+
+MEET_API_BASE = "https://meet.googleapis.com/v2"
+MEETING_CODE_PATTERN = re.compile(r'([a-z]{3}-[a-z]{4}-[a-z]{3})', re.IGNORECASE)
+DEFAULT_PERIOD_TIMINGS = [
+    {"label": "8-9 AM", "startHour": 8, "endHour": 9},
+    {"label": "9-10 AM", "startHour": 9, "endHour": 10},
+    {"label": "10-11 AM", "startHour": 10, "endHour": 11},
+    {"label": "11-12 PM", "startHour": 11, "endHour": 12},
+    {"label": "12-1 PM", "startHour": 12, "endHour": 13},
+    {"label": "1-2 PM", "startHour": 13, "endHour": 14},
+    {"label": "2-3 PM", "startHour": 14, "endHour": 15},
+    {"label": "3-4 PM", "startHour": 15, "endHour": 16}
+]
+
+
+def build_credentials_payload(credentials):
+    return {
+        'token': credentials.token,
+        'refresh_token': credentials.refresh_token,
+        'token_uri': credentials.token_uri,
+        'client_id': credentials.client_id,
+        'client_secret': credentials.client_secret,
+        'scopes': credentials.scopes
+    }
+
+
+def get_default_period_timings():
+    return [dict(item) for item in DEFAULT_PERIOD_TIMINGS]
+
+
+def normalize_period_timings(period_timings):
+    cleaned = []
+    for index, default_period in enumerate(DEFAULT_PERIOD_TIMINGS):
+        current = (period_timings or [])
+        candidate = current[index] if index < len(current) and isinstance(current[index], dict) else {}
+        start_hour = candidate.get("startHour", default_period["startHour"])
+        end_hour = candidate.get("endHour", default_period["endHour"])
+        label = (candidate.get("label") or default_period["label"]).strip()
+        try:
+            start_hour = int(start_hour)
+            end_hour = int(end_hour)
+        except (TypeError, ValueError):
+            start_hour = default_period["startHour"]
+            end_hour = default_period["endHour"]
+        if end_hour <= start_hour:
+            end_hour = start_hour + 1
+        cleaned.append({
+            "label": label,
+            "startHour": start_hour,
+            "endHour": end_hour
+        })
+    return cleaned
+
+
+def ensure_google_credentials(credentials_dict=None, persist_session=True):
+    if credentials_dict is None:
+        credentials_dict = session.get('credentials')
+        persist_session = True
+    if not credentials_dict:
+        return None
+
+    creds = google.oauth2.credentials.Credentials(**credentials_dict)
+    if creds.expired and creds.refresh_token:
+        creds.refresh(GoogleAuthRequest())
+        if persist_session:
+            session['credentials'] = build_credentials_payload(creds)
+            session.modified = True
+    return creds
+
+
+def normalize_meeting_code(value):
+    if not value:
+        return None
+    match = MEETING_CODE_PATTERN.search(str(value).strip())
+    return match.group(1).lower() if match else None
+
+
+def normalize_email(value):
+    cleaned = (value or '').strip().lower()
+    return cleaned or None
+
+
+def build_meet_link(meeting_code):
+    normalized_code = normalize_meeting_code(meeting_code)
+    return f"https://meet.google.com/{normalized_code}" if normalized_code else None
+
+
+def parse_google_timestamp(value):
+    if not value:
+        return None
+    normalized = str(value).replace('Z', '+00:00')
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def format_google_timestamp(value):
+    parsed = parse_google_timestamp(value)
+    if not parsed:
+        return None
+    return parsed.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+
+def get_duration_minutes(start_value, end_value):
+    start_time = parse_google_timestamp(start_value)
+    if not start_time:
+        return 0
+    end_time = parse_google_timestamp(end_value) or datetime.now(timezone.utc)
+    return round(max((end_time - start_time).total_seconds(), 0) / 60, 2)
+
+
+def get_total_session_minutes(sessions):
+    total_seconds = 0
+    for session_item in sessions:
+        start_time = parse_google_timestamp(session_item.get('startTime'))
+        end_time = parse_google_timestamp(session_item.get('endTime')) or datetime.now(timezone.utc)
+        if start_time:
+            total_seconds += max((end_time - start_time).total_seconds(), 0)
+    return round(total_seconds / 60, 2)
+
+
+def get_missing_scopes(*required_scopes):
+    granted = set((session.get('credentials') or {}).get('scopes') or [])
+    return [scope for scope in required_scopes if scope not in granted]
+
+
+def get_authenticated_teacher():
+    email = session.get('user', {}).get('email')
+    return Teacher.query.filter_by(email=email).first() if email else None
+
+
+def get_owned_course_or_404(course_id):
+    teacher = get_authenticated_teacher()
+    course = Course.query.get_or_404(course_id)
+    if teacher and course.teacher_id != teacher.id:
+        return None
+    return course
+
+
+def list_meet_collection(resource_path, item_key, creds, params=None):
+    authorized_session = AuthorizedSession(creds)
+    collection = []
+    page_token = None
+    while True:
+        query_params = dict(params or {})
+        if page_token:
+            query_params['pageToken'] = page_token
+
+        response = authorized_session.get(
+            f"{MEET_API_BASE}/{resource_path.lstrip('/')}",
+            params=query_params,
+            timeout=30
+        )
+        if not response.ok:
+            if response.status_code in (401, 403):
+                raise ValueError("Google Meet access expired. Please reconnect your Google account and try again.")
+            raise ValueError(f"Meet API error ({response.status_code}): {response.text}")
+
+        payload = response.json()
+        collection.extend(payload.get(item_key, []))
+        page_token = payload.get('nextPageToken')
+        if not page_token:
+            break
+    return collection
+
+
+def extract_meet_user_id(participant):
+    signed_in_user = participant.get('signedinUser') or {}
+    user_name = signed_in_user.get('user') or ''
+    return user_name.split('/')[-1] if user_name else None
+
+
+def resolve_classroom_email(classroom_service, user_id, cache):
+    if not classroom_service or not user_id:
+        return None
+    if user_id in cache:
+        return cache[user_id]
+
+    try:
+        profile = classroom_service.userProfiles().get(userId=user_id).execute()
+        email = normalize_email(profile.get('emailAddress'))
+    except Exception as exc:
+        app.logger.warning("Could not resolve Classroom email for %s: %s", user_id, exc)
+        email = None
+
+    cache[user_id] = email
+    return email
+
+
+def build_attendance_row(student_name, email, join_time, leave_time, sessions=None, student=None):
+    sessions = sessions or []
+    active_sessions = [session_item for session_item in sessions if not session_item.get('endTime')]
+    session_count = len(sessions) if sessions else (1 if join_time else 0)
+    total_duration = get_total_session_minutes(sessions) if sessions else get_duration_minutes(join_time, leave_time)
+    return {
+        "studentId": student.id if student else None,
+        "rollNumber": student.roll_number if student else None,
+        "studentName": student_name,
+        "email": email,
+        "joinTime": format_google_timestamp(join_time),
+        "leaveTime": format_google_timestamp(leave_time) if leave_time else None,
+        "totalDurationMinutes": total_duration,
+        "sessionCount": session_count,
+        "rejoinCount": max(session_count - 1, 0),
+        "activeNow": bool(active_sessions),
+        "sessions": [
+            {
+                "joinTime": format_google_timestamp(session_item.get('startTime')),
+                "leaveTime": format_google_timestamp(session_item.get('endTime')) if session_item.get('endTime') else None,
+                "durationMinutes": get_duration_minutes(session_item.get('startTime'), session_item.get('endTime'))
+            }
+            for session_item in sessions
+        ]
+    }
 
 def normalize_api_key(value):
     if not value:
@@ -118,6 +338,16 @@ def parse_qp_json(text):
         return json.loads(text)
     except Exception:
         return None
+
+
+def extract_json_object(text):
+    if not text:
+        return None
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    return text[start:end + 1]
 
 
 def normalize_qp(qp, part_a_count, part_b_count, part_c_count):
@@ -268,11 +498,9 @@ def build_question_paper_docx(header, qp, part_a_count, part_b_count, part_c_cou
 
 
 def get_drive_service(credentials_dict=None):
-    if credentials_dict is None:
-        credentials_dict = session.get('credentials')
-    if not credentials_dict:
+    creds = ensure_google_credentials(credentials_dict)
+    if not creds:
         return None
-    creds = google.oauth2.credentials.Credentials(**credentials_dict)
     return build('drive', 'v3', credentials=creds)
 
 app = Flask(__name__)
@@ -307,7 +535,9 @@ CLIENT_SECRETS_FILE = "client_secret.json" # Download from Google Cloud Console
 SCOPES = [
     'https://www.googleapis.com/auth/classroom.courses.readonly', 
     'https://www.googleapis.com/auth/classroom.rosters.readonly',
+    'https://www.googleapis.com/auth/classroom.profile.emails',
     'https://www.googleapis.com/auth/classroom.student-submissions.students.readonly',
+    'https://www.googleapis.com/auth/meetings.space.readonly',
     'openid',
     'https://www.googleapis.com/auth/userinfo.email',
     'https://www.googleapis.com/auth/userinfo.profile',
@@ -326,11 +556,22 @@ with app.app_context():
             cols = [row[1] for row in conn.execute(text("PRAGMA table_info(teacher)")).fetchall()]
             if 'availability' not in cols:
                 conn.execute(text("ALTER TABLE teacher ADD COLUMN availability JSON"))
+            if 'period_timings' not in cols:
+                conn.execute(text("ALTER TABLE teacher ADD COLUMN period_timings JSON"))
             
             # Check Course table
             cols = [row[1] for row in conn.execute(text("PRAGMA table_info(course)")).fetchall()]
             if 'hours_per_week' not in cols:
                 conn.execute(text("ALTER TABLE course ADD COLUMN hours_per_week INTEGER DEFAULT 3"))
+            if 'meet_link' not in cols:
+                conn.execute(text("ALTER TABLE course ADD COLUMN meet_link VARCHAR(255)"))
+            if 'meet_code' not in cols:
+                conn.execute(text("ALTER TABLE course ADD COLUMN meet_code VARCHAR(32)"))
+
+            # Check Student table
+            cols = [row[1] for row in conn.execute(text("PRAGMA table_info(student)")).fetchall()]
+            if 'email' not in cols:
+                conn.execute(text("ALTER TABLE student ADD COLUMN email VARCHAR(255)"))
             conn.commit()
     except Exception as e:
         app.logger.warning(f"Migration check skipped/failed: {e}")
@@ -344,16 +585,199 @@ def reset_db():
 
 
 def get_classroom_service(credentials_dict=None):
-    if credentials_dict is None:
-        credentials_dict = session.get('credentials')
-    if not credentials_dict:
+    creds = ensure_google_credentials(credentials_dict)
+    if not creds:
         return None
     
     # Log current scopes for debugging
-    app.logger.info(f"Current Token Scopes: {credentials_dict.get('scopes')}")
-    
-    creds = google.oauth2.credentials.Credentials(**credentials_dict)
+    app.logger.info(f"Current Token Scopes: {getattr(creds, 'scopes', None)}")
     return build('classroom', 'v1', credentials=creds)
+
+
+def getMeetingLink(courseId, credentials_dict=None):
+    course = Course.query.get_or_404(courseId)
+    classroom_service = get_classroom_service(credentials_dict)
+    classroom_course = {}
+
+    if course.google_course_id and classroom_service:
+        classroom_course = classroom_service.courses().get(id=course.google_course_id).execute()
+
+    api_meet_link = classroom_course.get('meetLink') or classroom_course.get('meetingLink')
+    stored_meet_link = (course.meet_link or '').strip() or None
+    meeting_code = (
+        normalize_meeting_code(api_meet_link)
+        or normalize_meeting_code(course.meet_code)
+        or normalize_meeting_code(stored_meet_link)
+    )
+    meet_link = api_meet_link or stored_meet_link or build_meet_link(meeting_code)
+
+    source = 'classroom_api' if api_meet_link else ('stored_config' if stored_meet_link or meeting_code else 'unavailable')
+    warning = None
+    if not api_meet_link:
+        warning = (
+            "Google Classroom's documented Course resource does not expose a meetLink field. "
+            "ClassOps uses the saved Meet link/code when Classroom does not return one."
+        )
+
+    return {
+        "courseId": course.id,
+        "courseName": course.name,
+        "googleCourseId": course.google_course_id,
+        "meetLink": meet_link,
+        "meetingCode": meeting_code,
+        "source": source,
+        "classroomAlternateLink": classroom_course.get('alternateLink'),
+        "warning": warning
+    }
+
+
+def getAttendanceReport(meetingCode, courseId=None, credentials_dict=None):
+    normalized_code = normalize_meeting_code(meetingCode)
+    if not normalized_code:
+        raise ValueError("A valid Google Meet code is required.")
+
+    creds = ensure_google_credentials(credentials_dict)
+    if not creds:
+        raise ValueError("Missing Google credentials. Please authenticate again.")
+
+    conference_records = list_meet_collection(
+        "conferenceRecords",
+        "conferenceRecords",
+        creds,
+        params={
+            "filter": f'space.meeting_code = "{normalized_code}"',
+            "pageSize": 1
+        }
+    )
+
+    if not conference_records:
+        return {
+            "meetingCode": normalized_code,
+            "conferenceRecord": None,
+            "conferenceStartTime": None,
+            "conferenceEndTime": None,
+            "meetingEnded": False,
+            "attendance": [],
+            "unmatchedParticipants": [],
+            "presentStudentIds": [],
+            "status": "waiting_for_record"
+        }
+
+    conference_record = conference_records[0]
+    participants = list_meet_collection(
+        f"{conference_record['name']}/participants",
+        "participants",
+        creds,
+        params={"pageSize": 100}
+    )
+
+    classroom_service = get_classroom_service(credentials_dict) if courseId else None
+    email_cache = {}
+    attendance = []
+    unmatched_participants = []
+    present_student_ids = []
+    meeting_ended = bool(conference_record.get('endTime'))
+    live_present_count = 0
+    excluded_emails = {
+        normalize_email('johnjebarathinamn@jerusalemengg.ac.in'),
+        normalize_email(session.get('user', {}).get('email'))
+    }
+    excluded_emails = {email for email in excluded_emails if email}
+
+    student_by_email = {}
+    if courseId:
+        for student in Student.query.filter_by(course_id=courseId).all():
+            if student.email:
+                student_by_email[normalize_email(student.email)] = student
+
+    for participant in participants:
+        join_time = participant.get('earliestStartTime')
+        leave_time = participant.get('latestEndTime')
+        user_id = extract_meet_user_id(participant)
+        email = resolve_classroom_email(classroom_service, user_id, email_cache)
+        if email in excluded_emails:
+            continue
+        matched_student = student_by_email.get(email) if email else None
+        participant_sessions = list_meet_collection(
+            f"{participant['name']}/participantSessions",
+            "participantSessions",
+            creds,
+            params={"pageSize": 100}
+        )
+
+        if participant_sessions:
+            join_candidates = [session_item.get('startTime') for session_item in participant_sessions if session_item.get('startTime')]
+            if join_time:
+                join_candidates.append(join_time)
+            join_time = min(join_candidates) if join_candidates else join_time
+
+            leave_candidates = [session_item.get('endTime') for session_item in participant_sessions if session_item.get('endTime')]
+            leave_time = max(leave_candidates) if leave_candidates else None
+
+        if not leave_time:
+            meeting_ended = False
+            live_present_count += 1
+
+        row = build_attendance_row(
+            matched_student.name if matched_student else f"Participant {participant.get('name', '').split('/')[-1]}",
+            email,
+            join_time,
+            leave_time,
+            sessions=participant_sessions,
+            student=matched_student
+        )
+
+        if matched_student:
+            attendance.append(row)
+            present_student_ids.append(matched_student.id)
+        else:
+            unmatched_participants.append(row)
+
+    attendance = sort_participant_rows(attendance)
+    unmatched_participants = sort_participant_rows(unmatched_participants)
+    all_participants = sort_participant_rows(attendance + unmatched_participants)
+
+    return {
+        "meetingCode": normalized_code,
+        "conferenceRecord": conference_record.get('name'),
+        "conferenceStartTime": format_google_timestamp(conference_record.get('startTime')),
+        "conferenceEndTime": format_google_timestamp(conference_record.get('endTime')),
+        "meetingEnded": meeting_ended,
+        "livePresentCount": live_present_count,
+        "participantCount": len(all_participants),
+        "attendance": attendance,
+        "unmatchedParticipants": unmatched_participants,
+        "allParticipants": all_participants,
+        "presentStudentIds": present_student_ids,
+        "status": "completed" if meeting_ended else "in_progress"
+    }
+
+
+def build_meet_export_rows(report):
+    rows = []
+    for row in (report.get('allParticipants') or report.get('attendance') or []):
+        rows.append({
+            "studentName": row.get("studentName"),
+            "rollNumber": row.get("rollNumber"),
+            "email": row.get("email"),
+            "joinTime": row.get("joinTime"),
+            "leaveTime": row.get("leaveTime"),
+            "totalDurationMinutes": row.get("totalDurationMinutes"),
+            "sessionCount": row.get("sessionCount"),
+            "rejoinCount": row.get("rejoinCount"),
+            "activeNow": row.get("activeNow")
+        })
+    return rows
+
+
+def sort_participant_rows(rows):
+    return sorted(
+        rows or [],
+        key=lambda item: (
+            (item.get("studentName") or "").strip().lower(),
+            (item.get("email") or "").strip().lower()
+        )
+    )
 
 
 def sync_classroom_data(credentials_dict=None):
@@ -453,14 +877,7 @@ def google_auth_callback():
         flow.fetch_token(authorization_response=authorization_response, code_verifier=code_verifier)
 
         credentials = flow.credentials
-        session['credentials'] = {
-            'token': credentials.token,
-            'refresh_token': credentials.refresh_token,
-            'token_uri': credentials.token_uri,
-            'client_id': credentials.client_id,
-            'client_secret': credentials.client_secret,
-            'scopes': credentials.scopes
-        }
+        session['credentials'] = build_credentials_payload(credentials)
 
         # Fetch User Profile
         user_info_service = build('oauth2', 'v2', credentials=credentials)
@@ -529,10 +946,176 @@ def sync_classroom():
 def get_courses():
     if 'user' not in session:
         return jsonify({"error": "Not authenticated"}), 401
-    email = session.get('user', {}).get('email')
-    teacher = Teacher.query.filter_by(email=email).first() if email else None
+    teacher = get_authenticated_teacher()
     courses = Course.query.filter_by(teacher_id=teacher.id).all() if teacher else []
-    return jsonify([{"id": c.id, "google_course_id": c.google_course_id, "name": c.name} for c in courses])
+    return jsonify([
+        {
+            "id": c.id,
+            "google_course_id": c.google_course_id,
+            "name": c.name,
+            "hours_per_week": c.hours_per_week,
+            "meet_link": c.meet_link,
+            "meeting_code": c.meet_code
+        }
+        for c in courses
+    ])
+
+
+@app.route('/api/courses/<int:course_id>/meeting-config', methods=['GET', 'POST'])
+def course_meeting_config(course_id):
+    if 'user' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    course = get_owned_course_or_404(course_id)
+    if not course:
+        return jsonify({"error": "Forbidden"}), 403
+
+    if request.method == 'POST':
+        data = request.json or {}
+        meeting_code = normalize_meeting_code(data.get('meeting_code') or data.get('meet_link'))
+        meet_link = (data.get('meet_link') or '').strip() or build_meet_link(meeting_code)
+
+        if not meeting_code and not meet_link:
+            return jsonify({"error": "Provide a Meet link or meeting code."}), 400
+
+        course.meet_code = meeting_code
+        course.meet_link = meet_link
+        db.session.commit()
+
+    try:
+        return jsonify(getMeetingLink(course_id)), 200
+    except Exception as exc:
+        app.logger.exception("Failed to resolve meeting config: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route('/api/courses/<int:course_id>/meet/attendance', methods=['GET'])
+def get_course_meet_attendance(course_id):
+    if 'user' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    course = get_owned_course_or_404(course_id)
+    if not course:
+        return jsonify({"error": "Forbidden"}), 403
+
+    missing_scopes = get_missing_scopes(
+        'https://www.googleapis.com/auth/classroom.profile.emails',
+        'https://www.googleapis.com/auth/meetings.space.readonly'
+    )
+    if missing_scopes:
+        return jsonify({
+            "error": "Please sign in with Google again to grant the Meet attendance scopes.",
+            "missing_scopes": missing_scopes
+        }), 400
+
+    requested_code = request.args.get('meeting_code')
+    resolved = getMeetingLink(course_id)
+    meeting_code = normalize_meeting_code(requested_code) or resolved.get('meetingCode')
+    if not meeting_code:
+        return jsonify({
+            "error": "No Google Meet code is configured for this course yet.",
+            "meeting": resolved
+        }), 400
+
+    try:
+        report = getAttendanceReport(meeting_code, courseId=course_id)
+        report["meeting"] = resolved
+        return jsonify(report), 200
+    except Exception as exc:
+        app.logger.exception("Failed to fetch Meet attendance report: %s", exc)
+        return jsonify({
+            "meeting": resolved,
+            "meetingCode": meeting_code,
+            "conferenceRecord": None,
+            "conferenceStartTime": None,
+            "conferenceEndTime": None,
+            "meetingEnded": False,
+            "livePresentCount": 0,
+            "participantCount": 0,
+            "attendance": [],
+            "unmatchedParticipants": [],
+            "allParticipants": [],
+            "presentStudentIds": [],
+            "status": "unavailable",
+            "message": str(exc)
+        }), 200
+
+
+@app.route('/api/courses/<int:course_id>/meet/attendance/export', methods=['GET'])
+def export_course_meet_attendance(course_id):
+    if 'user' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    course = get_owned_course_or_404(course_id)
+    if not course:
+        return jsonify({"error": "Forbidden"}), 403
+
+    missing_scopes = get_missing_scopes(
+        'https://www.googleapis.com/auth/classroom.profile.emails',
+        'https://www.googleapis.com/auth/meetings.space.readonly'
+    )
+    if missing_scopes:
+        return jsonify({
+            "error": "Please sign in with Google again to grant the Meet attendance scopes.",
+            "missing_scopes": missing_scopes
+        }), 400
+
+    requested_code = request.args.get('meeting_code')
+    export_format = (request.args.get('format') or 'json').strip().lower()
+    resolved = getMeetingLink(course_id)
+    meeting_code = normalize_meeting_code(requested_code) or resolved.get('meetingCode')
+    if not meeting_code:
+        return jsonify({"error": "No Google Meet code is configured for this course yet."}), 400
+
+    try:
+        report = getAttendanceReport(meeting_code, courseId=course_id)
+        export_rows = build_meet_export_rows(report)
+
+        if export_format == 'csv':
+            output = io.StringIO()
+            writer = csv.DictWriter(
+                output,
+                fieldnames=[
+                    "studentName",
+                    "rollNumber",
+                    "email",
+                    "joinTime",
+                    "leaveTime",
+                    "totalDurationMinutes",
+                    "sessionCount",
+                    "rejoinCount",
+                    "activeNow"
+                ]
+            )
+            writer.writeheader()
+            writer.writerows(export_rows)
+
+            response = make_response(output.getvalue())
+            response.headers["Content-Type"] = "text/csv; charset=utf-8"
+            response.headers["Content-Disposition"] = f'attachment; filename=meet_attendance_course_{course_id}_{meeting_code}.csv'
+            return response
+
+        payload = {
+            "meeting": resolved,
+            "summary": {
+                "meetingCode": report.get("meetingCode"),
+                "conferenceRecord": report.get("conferenceRecord"),
+                "conferenceStartTime": report.get("conferenceStartTime"),
+                "conferenceEndTime": report.get("conferenceEndTime"),
+                "meetingEnded": report.get("meetingEnded"),
+                "participantCount": report.get("participantCount"),
+                "livePresentCount": report.get("livePresentCount")
+            },
+            "attendance": export_rows,
+            "unmatchedParticipants": report.get("unmatchedParticipants") or []
+        }
+        response = make_response(json.dumps(payload, indent=2))
+        response.headers["Content-Type"] = "application/json; charset=utf-8"
+        response.headers["Content-Disposition"] = f'attachment; filename=meet_attendance_course_{course_id}_{meeting_code}.json'
+        return response
+    except Exception as exc:
+        app.logger.exception("Failed to export Meet attendance report: %s", exc)
+        return jsonify({"error": str(exc)}), 500
 
 @app.route('/api/courses/<int:course_id>/sync-assignments', methods=['POST'])
 def sync_assignments(course_id):
@@ -739,11 +1322,16 @@ def generate_question_paper():
         qp = getattr(response, "parsed", None)
         if not qp:
             qp = parse_qp_json(raw_text)
+        if not qp:
+            qp = parse_qp_json(extract_json_object(raw_text))
         qp = normalize_qp(qp, part_a_count, part_b_count, part_c_count)
         if not qp:
             if output == 'text':
                 return jsonify({"question_paper": raw_text})
-            return jsonify({"error": "Failed to parse structured question paper. Try again."}), 500
+            return jsonify({
+                "error": "Failed to parse structured question paper. Try again.",
+                "details": raw_text[:400]
+            }), 500
 
         if output == 'text':
             rendered = render_qp_text(qp, part_a_count, part_b_count, part_c_count)
@@ -1154,13 +1742,24 @@ def sync_students_for_course(course_id):
     if not service:
         return jsonify({"error": "Not authenticated"}), 401
     
-    course = Course.query.get_or_404(course_id)
+    course = get_owned_course_or_404(course_id)
+    if not course:
+        return jsonify({"error": "Forbidden"}), 403
     if not course.google_course_id:
         return jsonify({"error": "Course not linked to Google Classroom"}), 400
 
     try:
-        results = service.courses().students().list(courseId=course.google_course_id).execute()
-        students_data = results.get('students', [])
+        students_data = []
+        next_page_token = None
+        while True:
+            results = service.courses().students().list(
+                courseId=course.google_course_id,
+                pageToken=next_page_token
+            ).execute()
+            students_data.extend(results.get('students', []))
+            next_page_token = results.get('nextPageToken')
+            if not next_page_token:
+                break
 
         count = 0
         for s_data in students_data:
@@ -1171,6 +1770,7 @@ def sync_students_for_course(course_id):
 
             profile = s_data.get('profile', {})
             name = profile.get('name', {}).get('fullName', 'Unknown Student')
+            email = normalize_email(profile.get('emailAddress'))
             
             # Check if student exists in this course
             existing = Student.query.filter_by(roll_number=student_id_google, course_id=course.id).first()
@@ -1178,10 +1778,14 @@ def sync_students_for_course(course_id):
                 new_student = Student(
                     roll_number=student_id_google, 
                     name=name, 
+                    email=email,
                     course_id=course.id
                 )
                 db.session.add(new_student)
                 count += 1
+            else:
+                existing.name = name
+                existing.email = email or existing.email
         
         db.session.commit()
         return jsonify({"message": f"Synced {count} new students successfully"}), 200
@@ -1195,7 +1799,8 @@ def get_students(course_id):
     return jsonify([{
         "id": s.id,
         "name": s.name,
-        "roll_number": s.roll_number
+        "roll_number": s.roll_number,
+        "email": s.email
     } for s in students]), 200
 
 # ==========================================
@@ -1215,6 +1820,8 @@ def teacher_profile():
         data = request.json
         if 'availability' in data:
             teacher.availability = data['availability']
+        if 'period_timings' in data:
+            teacher.period_timings = normalize_period_timings(data['period_timings'])
         if 'name' in data:
             teacher.name = data['name']
         
@@ -1223,7 +1830,11 @@ def teacher_profile():
             for c_data in data['courses']:
                 course = Course.query.get(c_data['id'])
                 if course and course.teacher_id == teacher.id:
-                    course.hours_per_week = c_data.get('hours', course.hours_per_week)
+                    try:
+                        parsed_hours = int(c_data.get('hours', course.hours_per_week))
+                    except (TypeError, ValueError):
+                        parsed_hours = course.hours_per_week
+                    course.hours_per_week = max(parsed_hours, 0)
         
         db.session.commit()
         return jsonify({"message": "Profile updated successfully"})
@@ -1232,6 +1843,7 @@ def teacher_profile():
     return jsonify({
         "name": teacher.name,
         "availability": teacher.availability or {day: [] for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]},
+        "period_timings": normalize_period_timings(teacher.period_timings),
         "courses": [{"id": c.id, "name": c.name, "hours": c.hours_per_week} for c in teacher.courses]
     })
 
@@ -1251,11 +1863,17 @@ def generate_timetable():
     availability = teacher.availability or {}
     courses_to_schedule = []
     for c in teacher.courses:
+        hours = max(int(c.hours_per_week or 0), 0)
+        if hours <= 0:
+            continue
         courses_to_schedule.append({
             'id': c.id,
             'name': c.name,
-            'hours': c.hours_per_week
+            'hours': hours
         })
+
+    if not courses_to_schedule:
+        return jsonify({"error": "No active timetable classes found. Set hours greater than 0 for current classes."}), 400
 
     # Run scheduler
     new_slots = run_backtracking_scheduler(availability, courses_to_schedule)
@@ -1294,13 +1912,22 @@ def get_timetable():
     
     email = session['user'].get('email')
     teacher = Teacher.query.filter_by(email=email).first()
-    if not teacher or not teacher.timetable:
-        return jsonify({"message": "No timetable found.", "timetable": {}}), 200
+    if not teacher:
+        return jsonify({"error": "Teacher not found"}), 404
+    if not teacher.timetable:
+        return jsonify({
+            "message": "No timetable found.",
+            "timetable": {},
+            "availability": teacher.availability or {day: [] for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]},
+            "period_timings": normalize_period_timings(teacher.period_timings)
+        }), 200
 
     # Format into a nested dict for frontend
     result = {}
     # Initialize with course IDs
     for c in teacher.courses:
+        if (c.hours_per_week or 0) <= 0:
+            continue
         result[c.id] = {day: {} for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]}
     
     for slot in teacher.timetable.slots:
@@ -1308,11 +1935,76 @@ def get_timetable():
             result[slot.course_id] = {day: {} for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]}
         
         result[slot.course_id][slot.day][slot.period] = {
+            "slot_id": slot.id,
+            "course_id": slot.course_id,
             "sub": slot.subject,
-            "className": slot.course.name
+            "className": slot.course.name,
+            "meetLink": slot.course.meet_link,
+            "meetingCode": slot.course.meet_code
         }
 
-    return jsonify({"timetable": result})
+    return jsonify({
+        "timetable": result,
+        "availability": teacher.availability or {day: [] for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]},
+        "period_timings": normalize_period_timings(teacher.period_timings)
+    })
+
+
+@app.route('/api/timetable/slot', methods=['POST'])
+def upsert_timetable_slot():
+    if 'user' not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    email = session['user'].get('email')
+    teacher = Teacher.query.filter_by(email=email).first()
+    if not teacher:
+        return jsonify({"error": "Teacher not found"}), 404
+    if not teacher.timetable:
+        timetable = Timetable(teacher_id=teacher.id)
+        db.session.add(timetable)
+        db.session.commit()
+    else:
+        timetable = teacher.timetable
+
+    data = request.json or {}
+    day = data.get('day')
+    try:
+        period = int(data.get('period'))
+    except (TypeError, ValueError):
+        return jsonify({"error": "period must be an integer"}), 400
+
+    if day not in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]:
+        return jsonify({"error": "Invalid day"}), 400
+
+    existing_slot = TimetableSlot.query.filter_by(timetable_id=timetable.id, day=day, period=period).first()
+    course_id = data.get('course_id')
+    if not course_id:
+        if existing_slot:
+            db.session.delete(existing_slot)
+            db.session.commit()
+        return jsonify({"message": "Timetable slot cleared."}), 200
+
+    course = Course.query.get(course_id)
+    if not course or course.teacher_id != teacher.id:
+        return jsonify({"error": "Invalid course"}), 400
+    if (course.hours_per_week or 0) <= 0:
+        return jsonify({"error": "This class is inactive. Set hours above 0 before assigning it."}), 400
+
+    if existing_slot:
+        existing_slot.course_id = course.id
+        existing_slot.subject = course.name
+    else:
+        new_slot = TimetableSlot(
+            timetable_id=timetable.id,
+            day=day,
+            period=period,
+            course_id=course.id,
+            subject=course.name
+        )
+        db.session.add(new_slot)
+
+    db.session.commit()
+    return jsonify({"message": "Timetable slot updated."}), 200
 
 @app.route('/api/config/update-key', methods=['POST'])
 def update_api_key():
@@ -1358,25 +2050,3 @@ def update_api_key():
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

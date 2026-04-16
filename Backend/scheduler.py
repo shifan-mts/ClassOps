@@ -11,9 +11,17 @@ def run_backtracking_scheduler(teacher_availability: Dict[str, List[int]], cours
     returns: List of slots [{'day': 'Monday', 'period': 0, 'course_id': 1, 'subject': 'Math'}, ...]
     """
     tasks = []
+    active_courses = []
     for c in courses:
-        for _ in range(c['hours']):
+        hours = max(int(c.get('hours', 0) or 0), 0)
+        if hours <= 0:
+            continue
+        active_courses.append({**c, 'hours': hours})
+        for _ in range(hours):
             tasks.append({'id': c['id'], 'name': c['name']})
+
+    if not active_courses:
+        return []
     
     # Shuffle tasks to get different results
     random.shuffle(tasks)

@@ -8,6 +8,7 @@ class Teacher(db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     name = db.Column(db.String(120), nullable=False)
     availability = db.Column(db.JSON, nullable=True) # Store {Day: [slots]}
+    period_timings = db.Column(db.JSON, nullable=True)
     courses = db.relationship('Course', backref='teacher', lazy=True)
     timetable = db.relationship('Timetable', backref='teacher', uselist=False, lazy=True)
 
@@ -16,6 +17,8 @@ class Course(db.Model):
     google_course_id = db.Column(db.String(120), unique=True, nullable=True)
     name = db.Column(db.String(200), nullable=False)
     hours_per_week = db.Column(db.Integer, default=3)
+    meet_link = db.Column(db.String(255), nullable=True)
+    meet_code = db.Column(db.String(32), nullable=True)
     teacher_id = db.Column(db.Integer, db.ForeignKey('teacher.id'), nullable=False)
     students = db.relationship('Student', backref='course', lazy=True)
     targets = db.relationship('MaterialTarget', backref='course', lazy=True)
@@ -46,6 +49,7 @@ class Student(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     roll_number = db.Column(db.String(50), nullable=False)
     name = db.Column(db.String(120), nullable=False)
+    email = db.Column(db.String(255), nullable=True)
     course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
     attendances = db.relationship('Attendance', backref='student', lazy=True)
     metrics = db.relationship('StudentMetric', backref='student', lazy=True)

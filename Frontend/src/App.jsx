@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
 import Timetablegenerator from './components/ui/page/Timetablegenerator';
+import MeetAttendancePanel from './components/MeetAttendancePanel';
 
 function AttendanceReport({ report, loading, onRefresh }) {
   return (
@@ -145,6 +146,8 @@ export default function App() {
   const [complianceMetrics, setComplianceMetrics] = useState({ coCoverage: 0, poMapping: 0, status: "" });
   const [metricsLoading, setMetricsLoading] = useState(false);
   const [metricsError, setMetricsError] = useState("");
+  const [timetableData, setTimetableData] = useState({});
+  const [periodTimings, setPeriodTimings] = useState([]);
 
   const API_BASE = "http://localhost:5000";
 
@@ -152,6 +155,21 @@ export default function App() {
     fetchUser();
     fetchCourses();
   }, []);
+
+  useEffect(() => {
+    if (user) {
+      fetchTimetableData();
+    } else {
+      setTimetableData({});
+      setPeriodTimings([]);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (activeTab === "meet" || activeTab === "timetable") {
+      fetchTimetableData();
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     if (selectedCourseId) {
@@ -453,7 +471,8 @@ export default function App() {
         const data = await res.json();
         setCourses(Array.isArray(data) ? data : []);
         if (Array.isArray(data) && data.length > 0 && !selectedCourseId) {
-          setSelectedCourseId(data[0].id.toString());
+          const firstActiveCourse = data.find((course) => Number(course?.hours_per_week || 0) > 0);
+          setSelectedCourseId((firstActiveCourse || data[0]).id.toString());
         }
       } else if (res.status === 401) {
         setCourses([]);
@@ -464,19 +483,59 @@ export default function App() {
     }
   };
 
+  const fetchTimetableData = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/timetable`, { credentials: "include" });
+      const data = await res.json();
+      if (res.ok && data?.timetable) {
+        setTimetableData(data.timetable);
+        setPeriodTimings(Array.isArray(data?.period_timings) ? data.period_timings : []);
+      } else {
+        setTimetableData({});
+        setPeriodTimings([]);
+      }
+    } catch (err) {
+      console.error("Failed to fetch timetable", err);
+      setTimetableData({});
+      setPeriodTimings([]);
+    }
+  };
+
   const fetchStudents = async (courseId) => {
     if (!courseId) return;
     try {
       const res = await fetch(`${API_BASE}/api/courses/${courseId}/students`, { credentials: "include" });
       const data = await res.json();
-      setStudents(data);
+      setStudents(Array.isArray(data) ? data : []);
 
       const initial = {};
-      data.forEach(s => initial[s.id] = "Present");
+      (Array.isArray(data) ? data : []).forEach(s => initial[s.id] = "Present");
       setAttendanceRecords(initial);
     } catch (err) {
       console.error("Failed to fetch students", err);
     }
+  };
+
+  const handleMeetAttendanceMapped = (rows) => {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return;
+    }
+
+    const presentEmails = new Set(
+      rows
+        .map((row) => row?.email?.toLowerCase())
+        .filter(Boolean)
+    );
+
+    setAttendanceRecords((prev) => {
+      const next = { ...prev };
+      students.forEach((student) => {
+        if (student.email && presentEmails.has(student.email.toLowerCase())) {
+          next[student.id] = "Present";
+        }
+      });
+      return next;
+    });
   };
 
   const syncStudents = async () => {
@@ -655,10 +714,7 @@ export default function App() {
           if (res.status === 429 || errText.includes("quota") || errText.includes("api key") || errText.includes("invalid")) {
             setIsQuotaExceeded(true);
           }
-          if (res.status === 401 && qpOutput === "google_doc") {
-          throw new Error("Please sign in again to grant Google Drive access.");
-        }
-        throw new Error(data?.error || `Request failed with status ${res.status}`);
+          throw new Error(data?.error || `Request failed with status ${res.status}`);
         }
         const blob = await res.blob();
         const safeCourse = (courseName || "question_paper").replace(/[^a-z0-9]+/gi, "_").toLowerCase();
@@ -674,6 +730,9 @@ export default function App() {
         const errText = (data?.error || "").toLowerCase();
         if (res.status === 429 || errText.includes("quota") || errText.includes("api key") || errText.includes("invalid")) {
           setIsQuotaExceeded(true);
+        }
+        if (res.status === 401 && qpOutput === "google_doc") {
+          throw new Error("Please sign in again to grant Google Drive access.");
         }
         throw new Error(data?.error || `Request failed with status ${res.status}`);
       }
@@ -766,6 +825,7 @@ export default function App() {
           {[
             { id: "overview", label: "Overview & Targets" },
             { id: "attendance", label: "Attendance" },
+            { id: "meet", label: "Meet" },
             { id: "ai-tools", label: "AI Tools" },
             { id: "timetable", label: "Timetable" }
           ].map((tab) => (
@@ -992,6 +1052,21 @@ export default function App() {
           </section>
         )}
 
+        {activeTab === "meet" && (
+          <MeetAttendancePanel
+            apiBase={API_BASE}
+            courses={courses}
+            courseId={selectedCourseId}
+            onCourseChange={setSelectedCourseId}
+            students={students}
+            timetableData={timetableData}
+            periodTimings={periodTimings}
+            onAttendanceMapped={handleMeetAttendanceMapped}
+            onSyncStudents={syncStudents}
+            isSyncing={isSyncing}
+          />
+        )}
+
         {activeTab === "ai-tools" && (
           <section className="stack">
             <div className="card">
@@ -1206,12 +1281,6 @@ export default function App() {
     </div>
   );
 }
-
-
-
-
-
-
 
 
 
