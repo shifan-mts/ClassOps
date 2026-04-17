@@ -1,14 +1,17 @@
 import os
 # 1. Force HTTP for local testing (No HTTPS needed) - Must be set BEFORE imports
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+# 2. Relax token scope checking to prevent errors when Google drops unverified scopes
+os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
 
 from flask import Flask, request, jsonify, redirect, url_for, session, send_file, make_response
 from flask_cors import CORS
 from flask_session import Session
-from models import db, Teacher, Course, Student, Attendance, MaterialTarget, StudentMetric, Assignment, Timetable, TimetableSlot, UserRole
+from models import db, Teacher, Course, Student, Attendance, MaterialTarget, StudentMetric, Assignment, Timetable, TimetableSlot
 from dotenv import load_dotenv
 import google.oauth2.credentials
 from google_auth_oauthlib.flow import Flow
+from email_parser import parse_jerusalem_email
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 import io
@@ -537,7 +540,13 @@ SCOPES = [
     'https://www.googleapis.com/auth/classroom.rosters.readonly',
     'https://www.googleapis.com/auth/classroom.profile.emails',
     'https://www.googleapis.com/auth/classroom.student-submissions.students.readonly',
+    'https://www.googleapis.com/auth/classroom.student-submissions.me.readonly',
+    'https://www.googleapis.com/auth/classroom.coursework.students.readonly',
+    'https://www.googleapis.com/auth/classroom.coursework.me.readonly',
+    'https://www.googleapis.com/auth/classroom.announcements.readonly',
+    'https://www.googleapis.com/auth/classroom.courseworkmaterials.readonly',
     'https://www.googleapis.com/auth/meetings.space.readonly',
+    'https://www.googleapis.com/auth/calendar',
     'openid',
     'https://www.googleapis.com/auth/userinfo.email',
     'https://www.googleapis.com/auth/userinfo.profile',
@@ -548,11 +557,6 @@ GOOGLE_REDIRECT_URI = "http://localhost:5000/api/auth/google/callback"
 # Initialize DB
 with app.app_context():
     db.create_all()
-    # Seed Admin
-    admin_email = "angelinehephzibahj@gmail.com"
-    if not UserRole.query.filter_by(email=admin_email).first():
-        db.session.add(UserRole(email=admin_email, role='admin'))
-        db.session.commit()
 
     # Simple migration for SQLite (Add columns if they don't exist)
     try:
@@ -578,6 +582,31 @@ with app.app_context():
             cols = [row[1] for row in conn.execute(text("PRAGMA table_info(student)")).fetchall()]
             if 'email' not in cols:
                 conn.execute(text("ALTER TABLE student ADD COLUMN email VARCHAR(255)"))
+            if 'dept' not in cols:
+                conn.execute(text("ALTER TABLE student ADD COLUMN dept VARCHAR(50)"))
+            if 'batch' not in cols:
+                conn.execute(text("ALTER TABLE student ADD COLUMN batch INTEGER"))
+                
+            # Check TimetableSlot table
+            cols = [row[1] for row in conn.execute(text("PRAGMA table_info(timetable_slot)")).fetchall()]
+            if 'start_time' not in cols:
+                conn.execute(text("ALTER TABLE timetable_slot ADD COLUMN start_time VARCHAR(10)"))
+            if 'end_time' not in cols:
+                conn.execute(text("ALTER TABLE timetable_slot ADD COLUMN end_time VARCHAR(10)"))
+            if 'dept' not in cols:
+                conn.execute(text("ALTER TABLE timetable_slot ADD COLUMN dept VARCHAR(50)"))
+            if 'year' not in cols:
+                conn.execute(text("ALTER TABLE timetable_slot ADD COLUMN year INTEGER"))
+            if 'google_event_id' not in cols:
+                conn.execute(text("ALTER TABLE timetable_slot ADD COLUMN google_event_id VARCHAR(255)"))
+                
+            # Check Assignment table
+            cols = [row[1] for row in conn.execute(text("PRAGMA table_info(assignment)")).fetchall()]
+            if 'description' not in cols:
+                conn.execute(text("ALTER TABLE assignment ADD COLUMN description TEXT"))
+            if 'due_date' not in cols:
+                conn.execute(text("ALTER TABLE assignment ADD COLUMN due_date DATETIME"))
+
             conn.commit()
     except Exception as e:
         app.logger.warning(f"Migration check skipped/failed: {e}")
@@ -870,8 +899,10 @@ def google_auth_callback():
         return jsonify({"error": "Missing OAuth code verifier. Please try again."}), 400
 
     try:
+        # Use state from request URL to prevent CSRF mismatch errors caused by React StrictMode double-fetching
+        url_state = request.args.get('state')
         flow = Flow.from_client_secrets_file(
-            CLIENT_SECRETS_FILE, scopes=SCOPES, state=state
+            CLIENT_SECRETS_FILE, scopes=SCOPES, state=url_state or state
         )
         flow.redirect_uri = GOOGLE_REDIRECT_URI
         
@@ -898,20 +929,24 @@ def google_auth_callback():
         email = user_info.get('email')
         name = user_info.get('name', 'Unknown User')
 
-        # Role Check
-        user_role_entry = UserRole.query.filter_by(email=email).first()
-        if not user_role_entry:
-            if email == "angelinehephzibahj@gmail.com":
-                user_role_entry = UserRole(email=email, role='admin')
-                db.session.add(user_role_entry)
-                db.session.commit()
-            else:
-                return jsonify({"error": "Unauthorized access. Your email is not registered by the admin."}), 403
+        # Role Check via Email Parsing
+        parsed = parse_jerusalem_email(email)
+        
+        # Hardcode specific email to bypass for testing/owner access as teacher
+        if email == "angelinehephzibahj@gmail.com":
+            parsed['role'] = 'teacher'
+            
+        if parsed['role'] == 'unknown':
+            return jsonify({"error": "Unauthorized. Please use a valid college email address."}), 403
 
-        session['user']['role'] = user_role_entry.role
+        session['user']['role'] = parsed['role']
+        if parsed['role'] == 'student':
+            session['user']['dept'] = parsed.get('dept')
+            session['user']['batch'] = parsed.get('batch')
+            session['user']['current_year'] = parsed.get('current_year')
 
         # Ensure teacher exists if role is teacher
-        if user_role_entry.role == 'teacher' or user_role_entry.role == 'admin':
+        if parsed['role'] == 'teacher':
             teacher = Teacher.query.filter_by(email=email).first()
             if not teacher:
                 teacher = Teacher(email=email, name=name)
@@ -2069,52 +2104,312 @@ def update_api_key():
         return jsonify({"error": f"Failed to update .env: {str(e)}"}), 500
 
 # ==========================================
-# 6. ADMIN ENDPOINTS
+
+# ==========================================
+# 6. STUDENT DASHBOARD ENDPOINTS
 # ==========================================
 
-def is_admin():
-    if 'user' not in session:
-        return False
-    return session['user'].get('role') == 'admin'
+from datetime import datetime, timezone
 
-@app.route('/api/admin/users', methods=['GET'])
-def get_admin_users():
-    if not is_admin():
-        return jsonify({"error": "Unauthorized. Admin access required."}), 403
-    users = UserRole.query.all()
-    return jsonify([{"id": u.id, "email": u.email, "role": u.role} for u in users])
+@app.route('/api/student/dashboard', methods=['GET'])
+def student_dashboard():
+    if 'user' not in session or session['user'].get('role') != 'student':
+        return jsonify({"error": "Unauthorized. Student access required."}), 403
+        
+    user_info = session['user']
+    email = user_info.get('email')
+    
+    # Fetch data from Google Classroom
+    classrooms = []
+    assignments = {
+        "pending": [],
+        "submitted": [],
+        "missing": []
+    }
+    materials = []
+    
+    if 'credentials' in session:
+        try:
+            creds = google.oauth2.credentials.Credentials(**session['credentials'])
+            classroom_service = build('classroom', 'v1', credentials=creds)
+            
+            # Fetch Courses
+            courses_result = classroom_service.courses().list(studentId='me', courseStates=['ACTIVE']).execute()
+            google_courses = courses_result.get('courses', [])
+            
+            for course in google_courses:
+                classrooms.append({
+                    "id": course.get('id'),
+                    "name": course.get('name'),
+                    "section": course.get('section', ''),
+                    "teacher_name": "Teacher" # Hardcoded to prevent frontend charAt(0) crash
+                })
+                
+                # Fetch CourseWork
+                courseworks = []
+                try:
+                    coursework_result = classroom_service.courses().courseWork().list(courseId=course['id']).execute()
+                    courseworks = coursework_result.get('courseWork', [])
+                except Exception as e:
+                    pass
+                
+                # Fetch Materials (Announcements & CourseWorkMaterials)
+                try:
+                    announcements_result = classroom_service.courses().announcements().list(courseId=course['id']).execute()
+                    for ann in announcements_result.get('announcements', []):
+                        materials.append({
+                            "id": ann.get('id'),
+                            "course_id": course['id'],
+                            "course_name": course['name'],
+                            "title": ann.get('text', 'Announcement'),
+                            "type": "Announcement",
+                            "url": ann.get('alternateLink'),
+                            "date": ann.get('creationTime')
+                        })
+                except Exception as e:
+                    pass
+                    
+                try:
+                    materials_result = classroom_service.courses().courseWorkMaterials().list(courseId=course['id']).execute()
+                    for mat in materials_result.get('courseWorkMaterial', []):
+                        materials.append({
+                            "id": mat.get('id'),
+                            "course_id": course['id'],
+                            "course_name": course['name'],
+                            "title": mat.get('title', 'Material'),
+                            "type": "Material",
+                            "url": mat.get('alternateLink'),
+                            "date": mat.get('creationTime')
+                        })
+                except Exception as e:
+                    pass
+                
+                if not courseworks:
+                    continue
+                    
+                # Fetch Submissions
+                submissions = []
+                try:
+                    subs_result = classroom_service.courses().courseWork().studentSubmissions().list(
+                        courseId=course['id'],
+                        courseWorkId='-' # All coursework
+                    ).execute()
+                    submissions = subs_result.get('studentSubmissions', [])
+                except Exception as e:
+                    pass
+                
+                sub_dict = {sub['courseWorkId']: sub for sub in submissions}
+                
+                for cw in courseworks:
+                    sub = sub_dict.get(cw['id'], {})
+                    state = sub.get('state')
+                    
+                    is_submitted = state in ['TURNED_IN', 'RETURNED']
+                    
+                    due_date_obj = cw.get('dueDate')
+                    due_time_obj = cw.get('dueTime')
+                    
+                    item = {
+                        "id": cw['id'],
+                        "course_id": course['id'],
+                        "course_name": course['name'],
+                        "title": cw['title'],
+                        "due_date": f"{due_date_obj['year']}-{due_date_obj['month']:02d}-{due_date_obj['day']:02d}" if due_date_obj else None,
+                        "status": state
+                    }
+                    
+                    if is_submitted:
+                        assignments["submitted"].append(item)
+                    else:
+                        if due_date_obj:
+                            # Basic check for missing
+                            if sub.get('late'):
+                                assignments["missing"].append(item)
+                            else:
+                                assignments["pending"].append(item)
+                        else:
+                            assignments["pending"].append(item)
+                            
+        except Exception as e:
+            app.logger.exception("Failed to fetch student Google Classroom data")
 
-@app.route('/api/admin/users', methods=['POST'])
-def add_admin_user():
-    if not is_admin():
-        return jsonify({"error": "Unauthorized. Admin access required."}), 403
+    # Extract enrolled google course IDs
+    enrolled_gc_ids = [c['id'] for c in classrooms]
+    
+    # Fetch personalized timetable
+    timetable_data = []
+    if enrolled_gc_ids:
+        local_courses = Course.query.filter(Course.google_course_id.in_(enrolled_gc_ids)).all()
+        local_course_ids = [c.id for c in local_courses]
+        
+        if local_course_ids:
+            slots = TimetableSlot.query.filter(TimetableSlot.course_id.in_(local_course_ids)).all()
+            for slot in slots:
+                timetable_data.append({
+                    "id": slot.id,
+                    "day": slot.day,
+                    "start_time": slot.start_time,
+                    "end_time": slot.end_time,
+                    "subject": slot.subject,
+                    "google_event_id": slot.google_event_id,
+                    "meet_link": slot.course.meet_link if slot.course else None,
+                    "meet_code": slot.course.meet_code if slot.course else None
+                })
+
+    return jsonify({
+        "user": user_info,
+        "classrooms": classrooms,
+        "assignments": assignments,
+        "timetable": timetable_data,
+        "materials": sorted(materials, key=lambda x: x['date'] or '', reverse=True)
+    })
+
+
+# ==========================================
+# 7. TEACHER TIMETABLE API
+# ==========================================
+
+@app.route('/api/teacher/timetable', methods=['GET', 'POST'])
+def manage_timetable():
+    if 'user' not in session or session['user'].get('role') != 'teacher':
+        return jsonify({"error": "Unauthorized. Teacher access required."}), 403
+        
+    email = session['user']['email']
+    teacher = Teacher.query.filter_by(email=email).first()
+    
+    if request.method == 'GET':
+        if not teacher or not teacher.timetable:
+            return jsonify([])
+        slots = TimetableSlot.query.filter_by(timetable_id=teacher.timetable.id).all()
+        return jsonify([{
+            "id": s.id, "day": s.day, "start_time": s.start_time, "end_time": s.end_time,
+            "dept": s.dept, "year": s.year, "subject": s.subject, "google_event_id": s.google_event_id
+        } for s in slots])
+        
+    if request.method == 'POST':
+        data = request.json or {}
+        
+        if not teacher.timetable:
+            teacher.timetable = Timetable(teacher_id=teacher.id)
+            db.session.add(teacher.timetable)
+            db.session.commit()
+            
+        new_slot = TimetableSlot(
+            timetable_id=teacher.timetable.id,
+            day=data.get('day'),
+            start_time=data.get('start_time'),
+            end_time=data.get('end_time'),
+            dept=data.get('dept'),
+            year=data.get('year'),
+            subject=data.get('subject')
+        )
+        db.session.add(new_slot)
+        db.session.commit()
+        
+        # Sync to Teacher's Google Calendar
+        if 'credentials' in session:
+            try:
+                creds = google.oauth2.credentials.Credentials(**session['credentials'])
+                calendar_service = build('calendar', 'v3', credentials=creds)
+                
+                # Find the next date for the given day
+                import datetime as dt
+                days_of_week = {"Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3, "Friday": 4, "Saturday": 5, "Sunday": 6}
+                today = dt.date.today()
+                target_day = days_of_week.get(new_slot.day, 0)
+                days_ahead = target_day - today.weekday()
+                if days_ahead <= 0:
+                    days_ahead += 7
+                next_date = today + dt.timedelta(days_ahead)
+                date_str = next_date.isoformat()
+                
+                event = {
+                    'summary': f"[{new_slot.dept} Y{new_slot.year}] {new_slot.subject}",
+                    'description': 'ClassOps Auto-generated Class',
+                    'start': {
+                        'dateTime': f"{date_str}T{new_slot.start_time}:00", 
+                        'timeZone': 'Asia/Kolkata',
+                    },
+                    'end': {
+                        'dateTime': f"{date_str}T{new_slot.end_time}:00",
+                        'timeZone': 'Asia/Kolkata',
+                    },
+                    'recurrence': ['RRULE:FREQ=WEEKLY'],
+                }
+                
+                created_event = calendar_service.events().insert(calendarId='primary', body=event).execute()
+                new_slot.google_event_id = created_event.get('id')
+                db.session.commit()
+            except Exception as e:
+                app.logger.exception("Failed to sync to Google Calendar")
+                
+        return jsonify({"message": "Timetable slot added", "id": new_slot.id}), 201
+
+# ==========================================
+# 8. STUDENT CALENDAR SYNC
+# ==========================================
+
+@app.route('/api/student/calendar/sync', methods=['POST'])
+def sync_student_calendar():
+    if 'user' not in session or session['user'].get('role') != 'student':
+        return jsonify({"error": "Unauthorized"}), 403
+        
+    if 'credentials' not in session:
+        return jsonify({"error": "No Google credentials"}), 401
+        
+    user_info = session['user']
+    
     data = request.json or {}
-    email = data.get('email')
-    role = data.get('role', 'student')
-    if not email:
-        return jsonify({"error": "Email is required"}), 400
+    slots = data.get('slots', [])
     
-    existing = UserRole.query.filter_by(email=email).first()
-    if existing:
-        return jsonify({"error": "User already exists"}), 400
+    if not slots:
+        return jsonify({"message": "No timetable slots provided to sync"}), 400
         
-    new_user = UserRole(email=email, role=role)
-    db.session.add(new_user)
-    db.session.commit()
-    return jsonify({"id": new_user.id, "email": new_user.email, "role": new_user.role}), 201
-
-@app.route('/api/admin/users/<int:user_id>', methods=['DELETE'])
-def delete_admin_user(user_id):
-    if not is_admin():
-        return jsonify({"error": "Unauthorized. Admin access required."}), 403
+    creds = google.oauth2.credentials.Credentials(**session['credentials'])
+    calendar_service = build('calendar', 'v3', credentials=creds)
     
-    user_entry = UserRole.query.get_or_404(user_id)
-    if user_entry.email == "angelinehephzibahj@gmail.com":
-        return jsonify({"error": "Cannot delete the main admin"}), 400
-        
-    db.session.delete(user_entry)
-    db.session.commit()
-    return jsonify({"message": "User deleted successfully"}), 200
+    import datetime as dt
+    days_of_week = {"Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3, "Friday": 4, "Saturday": 5, "Sunday": 6}
+    today = dt.date.today()
+                
+    synced_count = 0
+    for slot in slots:
+        try:
+            target_day = days_of_week.get(slot.get('day'), 0)
+            days_ahead = target_day - today.weekday()
+            if days_ahead <= 0:
+                days_ahead += 7
+            next_date = today + dt.timedelta(days_ahead)
+            date_str = next_date.isoformat()
+            
+            meet_link = slot.get('meet_link')
+            desc = 'ClassOps Auto-synced Student Class'
+            if meet_link:
+                desc += f'\n\nJoin Class via Meet: {meet_link}'
+                
+            event = {
+                'summary': f"{slot.get('subject')} Class",
+                'description': desc,
+                'start': {
+                    'dateTime': f"{date_str}T{slot.get('start_time')}:00", 
+                    'timeZone': 'Asia/Kolkata',
+                },
+                'end': {
+                    'dateTime': f"{date_str}T{slot.get('end_time')}:00",
+                    'timeZone': 'Asia/Kolkata',
+                },
+                'recurrence': ['RRULE:FREQ=WEEKLY'],
+            }
+            
+            if meet_link:
+                event['location'] = meet_link
+                
+            calendar_service.events().insert(calendarId='primary', body=event).execute()
+            synced_count += 1
+        except Exception as e:
+            app.logger.error(f"Failed to sync slot {slot.get('id')}: {e}")
+            
+    return jsonify({"message": f"Successfully synced {synced_count} classes to your Google Calendar."})
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

@@ -34,23 +34,41 @@ class TimetableSlot(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     timetable_id = db.Column(db.Integer, db.ForeignKey('timetable.id'), nullable=False)
     day = db.Column(db.String(20), nullable=False) # Monday, etc.
-    period = db.Column(db.Integer, nullable=False) # 0-7
-    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
+    period = db.Column(db.Integer, nullable=True) # Optional for UI index
+    start_time = db.Column(db.String(10), nullable=True) # e.g., 10:00
+    end_time = db.Column(db.String(10), nullable=True)   # e.g., 11:00
+    dept = db.Column(db.String(50), nullable=True)       # e.g., CSE
+    year = db.Column(db.Integer, nullable=True)          # e.g., 3
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=True)
     subject = db.Column(db.String(120), nullable=False)
+    google_event_id = db.Column(db.String(255), nullable=True)
     course = db.relationship('Course')
 
 class Assignment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    google_assignment_id = db.Column(db.String(120), unique=True, nullable=False)
+    google_assignment_id = db.Column(db.String(120), unique=True, nullable=True) # Now optional
     title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    due_date = db.Column(db.DateTime, nullable=True)
     course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
+    submissions = db.relationship('StudentSubmission', backref='assignment', lazy=True)
+
+class StudentSubmission(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    assignment_id = db.Column(db.Integer, db.ForeignKey('assignment.id'), nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey('student.id'), nullable=False)
+    status = db.Column(db.String(50), default='pending') # pending, submitted, missing, graded
+    submitted_at = db.Column(db.DateTime, nullable=True)
+    score = db.Column(db.Float, nullable=True)
 
 class Student(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     roll_number = db.Column(db.String(50), nullable=False)
     name = db.Column(db.String(120), nullable=False)
     email = db.Column(db.String(255), nullable=True)
-    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
+    dept = db.Column(db.String(50), nullable=True)
+    batch = db.Column(db.Integer, nullable=True)
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=True)
     attendances = db.relationship('Attendance', backref='student', lazy=True)
     metrics = db.relationship('StudentMetric', backref='student', lazy=True)
 
@@ -76,7 +94,4 @@ class StudentMetric(db.Model):
     ai_usage_score = db.Column(db.Float, nullable=True)
     student_id = db.Column(db.Integer, db.ForeignKey('student.id'), nullable=False)
 
-class UserRole(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(255), unique=True, nullable=False)
-    role = db.Column(db.String(20), nullable=False, default='student')
+

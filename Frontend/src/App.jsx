@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import './App.css';
 import Timetablegenerator from './components/ui/page/Timetablegenerator';
 import MeetAttendancePanel from './components/MeetAttendancePanel';
-import AdminDashboard from './components/AdminDashboard';
+import StudentDashboard from './components/StudentDashboard';
 
 function AttendanceReport({ report, loading, onRefresh }) {
   return (
@@ -834,8 +834,7 @@ export default function App() {
               { id: "ai-tools", label: "AI Tools" },
               { id: "timetable", label: "Timetable" }
             ]),
-            ...(user?.role === 'student' ? [{ id: "student-dashboard", label: "Student Dashboard" }] : []),
-            ...(user?.role === 'admin' ? [{ id: "admin", label: "Admin Dashboard" }] : [])
+            ...(user?.role === 'student' ? [{ id: "student-dashboard", label: "Student Dashboard" }] : [])
           ].map((tab) => (
             <button
               key={tab.id}
@@ -1286,19 +1285,8 @@ export default function App() {
           </section>
         )}
 
-        {activeTab === "admin" && (
-          <AdminDashboard API_BASE={API_BASE} />
-        )}
-
         {activeTab === "student-dashboard" && (
-          <section className="grid">
-            <div className="card">
-              <div className="card-header">
-                <h3>Welcome, Student!</h3>
-                <p>Your dashboard is currently under construction. Please check back later for features.</p>
-              </div>
-            </div>
-          </section>
+          <StudentDashboard API_BASE={API_BASE} />
         )}
       </div>
     </div>
