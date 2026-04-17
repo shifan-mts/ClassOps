@@ -75,3 +75,8 @@ class StudentMetric(db.Model):
     plagiarism_score = db.Column(db.Float, nullable=True)
     ai_usage_score = db.Column(db.Float, nullable=True)
     student_id = db.Column(db.Integer, db.ForeignKey('student.id'), nullable=False)
+
+class UserRole(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(255), unique=True, nullable=False)
+    role = db.Column(db.String(20), nullable=False, default='student')

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import './App.css';
 import Timetablegenerator from './components/ui/page/Timetablegenerator';
 import MeetAttendancePanel from './components/MeetAttendancePanel';
+import AdminDashboard from './components/AdminDashboard';
 
 function AttendanceReport({ report, loading, onRefresh }) {
   return (
@@ -159,6 +160,9 @@ export default function App() {
   useEffect(() => {
     if (user) {
       fetchTimetableData();
+      if (user.role === 'student' && activeTab === 'overview') {
+        setActiveTab('student-dashboard');
+      }
     } else {
       setTimetableData({});
       setPeriodTimings([]);
@@ -823,11 +827,15 @@ export default function App() {
       <div className="tabs">
         <div className="tab-list">
           {[
-            { id: "overview", label: "Overview & Targets" },
-            { id: "attendance", label: "Attendance" },
-            { id: "meet", label: "Meet" },
-            { id: "ai-tools", label: "AI Tools" },
-            { id: "timetable", label: "Timetable" }
+            ...(user?.role === 'student' ? [] : [
+              { id: "overview", label: "Overview & Targets" },
+              { id: "attendance", label: "Attendance" },
+              { id: "meet", label: "Meet" },
+              { id: "ai-tools", label: "AI Tools" },
+              { id: "timetable", label: "Timetable" }
+            ]),
+            ...(user?.role === 'student' ? [{ id: "student-dashboard", label: "Student Dashboard" }] : []),
+            ...(user?.role === 'admin' ? [{ id: "admin", label: "Admin Dashboard" }] : [])
           ].map((tab) => (
             <button
               key={tab.id}
@@ -1275,6 +1283,21 @@ export default function App() {
         {activeTab === "timetable" && (
           <section className="stack">
             <Timetablegenerator courses={courses} />
+          </section>
+        )}
+
+        {activeTab === "admin" && (
+          <AdminDashboard API_BASE={API_BASE} />
+        )}
+
+        {activeTab === "student-dashboard" && (
+          <section className="grid">
+            <div className="card">
+              <div className="card-header">
+                <h3>Welcome, Student!</h3>
+                <p>Your dashboard is currently under construction. Please check back later for features.</p>
+              </div>
+            </div>
           </section>
         )}
       </div>

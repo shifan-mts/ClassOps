@@ -5,7 +5,7 @@ os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 from flask import Flask, request, jsonify, redirect, url_for, session, send_file, make_response
 from flask_cors import CORS
 from flask_session import Session
-from models import db, Teacher, Course, Student, Attendance, MaterialTarget, StudentMetric, Assignment, Timetable, TimetableSlot
+from models import db, Teacher, Course, Student, Attendance, MaterialTarget, StudentMetric, Assignment, Timetable, TimetableSlot, UserRole
 from dotenv import load_dotenv
 import google.oauth2.credentials
 from google_auth_oauthlib.flow import Flow
@@ -548,6 +548,12 @@ GOOGLE_REDIRECT_URI = "http://localhost:5000/api/auth/google/callback"
 # Initialize DB
 with app.app_context():
     db.create_all()
+    # Seed Admin
+    admin_email = "angelinehephzibahj@gmail.com"
+    if not UserRole.query.filter_by(email=admin_email).first():
+        db.session.add(UserRole(email=admin_email, role='admin'))
+        db.session.commit()
+
     # Simple migration for SQLite (Add columns if they don't exist)
     try:
         from sqlalchemy import text
@@ -889,14 +895,28 @@ def google_auth_callback():
             'picture': user_info.get('picture')
         }
 
-        # Ensure teacher exists immediately upon login
         email = user_info.get('email')
-        name = user_info.get('name', 'Unknown Teacher')
-        teacher = Teacher.query.filter_by(email=email).first()
-        if not teacher:
-            teacher = Teacher(email=email, name=name)
-            db.session.add(teacher)
-            db.session.commit()
+        name = user_info.get('name', 'Unknown User')
+
+        # Role Check
+        user_role_entry = UserRole.query.filter_by(email=email).first()
+        if not user_role_entry:
+            if email == "angelinehephzibahj@gmail.com":
+                user_role_entry = UserRole(email=email, role='admin')
+                db.session.add(user_role_entry)
+                db.session.commit()
+            else:
+                return jsonify({"error": "Unauthorized access. Your email is not registered by the admin."}), 403
+
+        session['user']['role'] = user_role_entry.role
+
+        # Ensure teacher exists if role is teacher
+        if user_role_entry.role == 'teacher' or user_role_entry.role == 'admin':
+            teacher = Teacher.query.filter_by(email=email).first()
+            if not teacher:
+                teacher = Teacher(email=email, name=name)
+                db.session.add(teacher)
+                db.session.commit()
 
         try:
             sync_classroom_data(session['credentials'])
@@ -2047,6 +2067,54 @@ def update_api_key():
     except Exception as e:
         app.logger.exception("Failed to update .env")
         return jsonify({"error": f"Failed to update .env: {str(e)}"}), 500
+
+# ==========================================
+# 6. ADMIN ENDPOINTS
+# ==========================================
+
+def is_admin():
+    if 'user' not in session:
+        return False
+    return session['user'].get('role') == 'admin'
+
+@app.route('/api/admin/users', methods=['GET'])
+def get_admin_users():
+    if not is_admin():
+        return jsonify({"error": "Unauthorized. Admin access required."}), 403
+    users = UserRole.query.all()
+    return jsonify([{"id": u.id, "email": u.email, "role": u.role} for u in users])
+
+@app.route('/api/admin/users', methods=['POST'])
+def add_admin_user():
+    if not is_admin():
+        return jsonify({"error": "Unauthorized. Admin access required."}), 403
+    data = request.json or {}
+    email = data.get('email')
+    role = data.get('role', 'student')
+    if not email:
+        return jsonify({"error": "Email is required"}), 400
+    
+    existing = UserRole.query.filter_by(email=email).first()
+    if existing:
+        return jsonify({"error": "User already exists"}), 400
+        
+    new_user = UserRole(email=email, role=role)
+    db.session.add(new_user)
+    db.session.commit()
+    return jsonify({"id": new_user.id, "email": new_user.email, "role": new_user.role}), 201
+
+@app.route('/api/admin/users/<int:user_id>', methods=['DELETE'])
+def delete_admin_user(user_id):
+    if not is_admin():
+        return jsonify({"error": "Unauthorized. Admin access required."}), 403
+    
+    user_entry = UserRole.query.get_or_404(user_id)
+    if user_entry.email == "angelinehephzibahj@gmail.com":
+        return jsonify({"error": "Cannot delete the main admin"}), 400
+        
+    db.session.delete(user_entry)
+    db.session.commit()
+    return jsonify({"message": "User deleted successfully"}), 200
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
