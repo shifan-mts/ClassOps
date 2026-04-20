@@ -1,97 +1,201 @@
-from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime, timezone
+import os
+import boto3
+from decimal import Decimal
+import json
 
-db = SQLAlchemy()
+# Setup boto3 resource
+# Using os.getenv for credentials and region (User should add them to .env/Render)
+AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+AWS_REGION = os.getenv('AWS_REGION', 'eu-north-1')
+DYNAMODB_TABLE_NAME = os.getenv('DYNAMODB_TABLE_NAME', 'ClassOps')
 
-class Teacher(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    name = db.Column(db.String(120), nullable=False)
-    availability = db.Column(db.JSON, nullable=True) # Store {Day: [slots]}
-    period_timings = db.Column(db.JSON, nullable=True)
-    courses = db.relationship('Course', backref='teacher', lazy=True)
-    timetable = db.relationship('Timetable', backref='teacher', uselist=False, lazy=True)
+dynamodb = boto3.resource(
+    'dynamodb',
+    region_name=AWS_REGION,
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+)
 
-class Course(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    google_course_id = db.Column(db.String(120), unique=True, nullable=True)
-    name = db.Column(db.String(200), nullable=False)
-    hours_per_week = db.Column(db.Integer, default=3)
-    meet_link = db.Column(db.String(255), nullable=True)
-    meet_code = db.Column(db.String(32), nullable=True)
-    teacher_id = db.Column(db.Integer, db.ForeignKey('teacher.id'), nullable=False)
-    students = db.relationship('Student', backref='course', lazy=True)
-    targets = db.relationship('MaterialTarget', backref='course', lazy=True)
-    assignments = db.relationship('Assignment', backref='course', lazy=True)
+table = dynamodb.Table(DYNAMODB_TABLE_NAME)
 
-class Timetable(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    teacher_id = db.Column(db.Integer, db.ForeignKey('teacher.id'), nullable=False)
-    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
-    slots = db.relationship('TimetableSlot', backref='timetable', cascade="all, delete-orphan", lazy=True)
+def decimal_to_native(obj):
+    """Recursively converts DynamoDB Decimals to native Python ints/floats for JSON serialization."""
+    if isinstance(obj, list):
+        return [decimal_to_native(i) for i in obj]
+    elif isinstance(obj, dict):
+        return {k: decimal_to_native(v) for k, v in obj.items()}
+    elif isinstance(obj, Decimal):
+        if obj % 1 == 0:
+            return int(obj)
+        else:
+            return float(obj)
+    return obj
 
-class TimetableSlot(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    timetable_id = db.Column(db.Integer, db.ForeignKey('timetable.id'), nullable=False)
-    day = db.Column(db.String(20), nullable=False) # Monday, etc.
-    period = db.Column(db.Integer, nullable=True) # Optional for UI index
-    start_time = db.Column(db.String(10), nullable=True) # e.g., 10:00
-    end_time = db.Column(db.String(10), nullable=True)   # e.g., 11:00
-    dept = db.Column(db.String(50), nullable=True)       # e.g., CSE
-    year = db.Column(db.Integer, nullable=True)          # e.g., 3
-    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=True)
-    subject = db.Column(db.String(120), nullable=False)
-    google_event_id = db.Column(db.String(255), nullable=True)
-    course = db.relationship('Course')
+# --- Core Helper Functions for Auth & Sync ---
 
-class Assignment(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    google_assignment_id = db.Column(db.String(120), unique=True, nullable=True) # Now optional
-    title = db.Column(db.String(200), nullable=False)
-    description = db.Column(db.Text, nullable=True)
-    due_date = db.Column(db.DateTime, nullable=True)
-    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
-    submissions = db.relationship('StudentSubmission', backref='assignment', lazy=True)
+def get_teacher(email):
+    response = table.get_item(
+        Key={
+            'PK': f"TEACHER#{email}",
+            'SK': 'METADATA'
+        }
+    )
+    return decimal_to_native(response.get('Item'))
 
-class StudentSubmission(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    assignment_id = db.Column(db.Integer, db.ForeignKey('assignment.id'), nullable=False)
-    student_id = db.Column(db.Integer, db.ForeignKey('student.id'), nullable=False)
-    status = db.Column(db.String(50), default='pending') # pending, submitted, missing, graded
-    submitted_at = db.Column(db.DateTime, nullable=True)
-    score = db.Column(db.Float, nullable=True)
+def put_teacher(teacher_data):
+    teacher_data['PK'] = f"TEACHER#{teacher_data['email']}"
+    teacher_data['SK'] = 'METADATA'
+    table.put_item(Item=teacher_data)
+    return teacher_data
 
-class Student(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    roll_number = db.Column(db.String(50), nullable=False)
-    name = db.Column(db.String(120), nullable=False)
-    email = db.Column(db.String(255), nullable=True)
-    dept = db.Column(db.String(50), nullable=True)
-    batch = db.Column(db.Integer, nullable=True)
-    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=True)
-    attendances = db.relationship('Attendance', backref='student', lazy=True)
-    metrics = db.relationship('StudentMetric', backref='student', lazy=True)
+def get_course(email, course_id):
+    response = table.get_item(
+        Key={
+            'PK': f"TEACHER#{email}",
+            'SK': f"COURSE#{course_id}"
+        }
+    )
+    return decimal_to_native(response.get('Item'))
 
-class Attendance(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    date = db.Column(db.Date, nullable=False, default=lambda: datetime.now(timezone.utc))
-    status = db.Column(db.String(20), nullable=False) # 'Present', 'Absent'
-    student_id = db.Column(db.Integer, db.ForeignKey('student.id'), nullable=False)
-    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
+def put_course(email, course_data):
+    course_id = course_data.get('id')
+    course_data['PK'] = f"TEACHER#{email}"
+    course_data['SK'] = f"COURSE#{course_id}"
+    table.put_item(Item=course_data)
+    return course_data
 
-class MaterialTarget(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    topic = db.Column(db.String(200), nullable=False)
-    target_date = db.Column(db.Date, nullable=False)
-    is_completed = db.Column(db.Boolean, default=False)
-    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
+def sync_student(course_id, student_data):
+    roll = student_data.get('roll_number')
+    student_data['PK'] = f"COURSE#{course_id}"
+    student_data['SK'] = f"STUDENT#{roll}"
+    table.put_item(Item=student_data)
+    return student_data
 
-class StudentMetric(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    assignment_name = db.Column(db.String(120), nullable=False)
-    score = db.Column(db.Float, nullable=False)
-    plagiarism_score = db.Column(db.Float, nullable=True)
-    ai_usage_score = db.Column(db.Float, nullable=True)
-    student_id = db.Column(db.Integer, db.ForeignKey('student.id'), nullable=False)
+def get_courses_by_teacher(email):
+    response = table.query(
+        KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_prefix)",
+        ExpressionAttributeValues={
+            ":pk": f"TEACHER#{email}",
+            ":sk_prefix": "COURSE#"
+        }
+    )
+    return decimal_to_native(response.get('Items', []))
 
+def get_students_by_course(course_id):
+    response = table.query(
+        KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_prefix)",
+        ExpressionAttributeValues={
+            ":pk": f"COURSE#{course_id}",
+            ":sk_prefix": "STUDENT#"
+        }
+    )
+    return decimal_to_native(response.get('Items', []))
 
+def get_assignments_by_course(course_id):
+    response = table.query(
+        KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_prefix)",
+        ExpressionAttributeValues={
+            ":pk": f"COURSE#{course_id}",
+            ":sk_prefix": "ASSIGNMENT#"
+        }
+    )
+    return decimal_to_native(response.get('Items', []))
+
+def put_assignment(course_id, assignment_data):
+    assignment_id = assignment_data.get('id') or assignment_data.get('google_assignment_id')
+    assignment_data['PK'] = f"COURSE#{course_id}"
+    assignment_data['SK'] = f"ASSIGNMENT#{assignment_id}"
+    table.put_item(Item=assignment_data)
+    return assignment_data
+
+def get_assignment(course_id, assignment_id):
+    response = table.get_item(
+        Key={
+            'PK': f"COURSE#{course_id}",
+            'SK': f"ASSIGNMENT#{assignment_id}"
+        }
+    )
+    return decimal_to_native(response.get('Item'))
+def get_attendance_records(course_id, date=None):
+    if date:
+        response = table.query(
+            KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_prefix)",
+            ExpressionAttributeValues={
+                ":pk": f"COURSE#{course_id}",
+                ":sk_prefix": f"ATTENDANCE#{date}#"
+            }
+        )
+    else:
+        response = table.query(
+            KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_prefix)",
+            ExpressionAttributeValues={
+                ":pk": f"COURSE#{course_id}",
+                ":sk_prefix": "ATTENDANCE#"
+            }
+        )
+    return decimal_to_native(response.get('Items', []))
+
+def put_attendance_record(course_id, record_data):
+    date = record_data.get('date')
+    roll = record_data.get('student_id') # mapping student_id to roll_number
+    record_data['PK'] = f"COURSE#{course_id}"
+    record_data['SK'] = f"ATTENDANCE#{date}#{roll}"
+    table.put_item(Item=record_data)
+    return record_data
+
+def get_material_targets_by_course(course_id):
+    response = table.query(
+        KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_prefix)",
+        ExpressionAttributeValues={
+            ":pk": f"COURSE#{course_id}",
+            ":sk_prefix": "TARGET#"
+        }
+    )
+    return decimal_to_native(response.get('Items', []))
+
+def put_material_target(course_id, target_data):
+    target_id = target_data.get('id')
+    target_data['PK'] = f"COURSE#{course_id}"
+    target_data['SK'] = f"TARGET#{target_id}"
+    table.put_item(Item=target_data)
+    return target_data
+
+def get_timetable_slots_by_course(course_id):
+    response = table.query(
+        KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_prefix)",
+        ExpressionAttributeValues={
+            ":pk": f"COURSE#{course_id}",
+            ":sk_prefix": "SLOT#"
+        }
+    )
+    return decimal_to_native(response.get('Items', []))
+
+def put_timetable_slot(course_id, slot_data):
+    slot_id = slot_data.get('id')
+    slot_data['PK'] = f"COURSE#{course_id}"
+    slot_data['SK'] = f"SLOT#{slot_id}"
+    table.put_item(Item=slot_data)
+    return slot_data
+
+def delete_timetable_slot(course_id, slot_id):
+    table.delete_item(
+        Key={
+            'PK': f"COURSE#{course_id}",
+            'SK': f"SLOT#{slot_id}"
+        }
+    )
+
+def get_courses_by_google_ids(google_course_ids):
+    # Since we don't have a GSI, we'll scan the table. 
+    # For a small to medium app, this is acceptable.
+    response = table.scan(
+        FilterExpression="begins_with(PK, :pk_prefix) AND begins_with(SK, :sk_prefix)",
+        ExpressionAttributeValues={
+            ":pk_prefix": "TEACHER#",
+            ":sk_prefix": "COURSE#"
+        }
+    )
+    all_courses = decimal_to_native(response.get('Items', []))
+    matched_courses = [c for c in all_courses if c.get('google_course_id') in google_course_ids]
+    return matched_courses

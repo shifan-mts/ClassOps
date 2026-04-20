@@ -1,6 +1,6 @@
 flask
 flask-cors
-flask-sqlalchemy
+boto3
 flask-session
 requests
 python-dotenv

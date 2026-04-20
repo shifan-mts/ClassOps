@@ -254,7 +254,7 @@ export default function App() {
     setAnalysisData(null);
     setAiError("");
     try {
-      const res = await fetch(`${API_BASE}/api/assignments/${selectedAssignmentId}/analyze`, {
+      const res = await fetch(`${API_BASE}/api/courses/${selectedCourseId}/assignments/${selectedAssignmentId}/analyze`, {
         method: "POST",
         credentials: "include"
       });
@@ -381,7 +381,7 @@ export default function App() {
   const toggleTargetStatus = async (targetId, completed) => {
     setIsSavingTarget(true);
     try {
-      const res = await fetch(`${API_BASE}/api/targets/${targetId}`, {
+      const res = await fetch(`${API_BASE}/api/courses/${selectedCourseId}/targets/${targetId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",

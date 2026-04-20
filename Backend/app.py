@@ -9,7 +9,7 @@ from flask_cors import CORS
 from flask_session import Session
 import logging
 
-from models import db, Teacher, Course, Student, Attendance, MaterialTarget, StudentMetric, Assignment, Timetable, TimetableSlot
+from models import table, decimal_to_native, get_teacher, put_teacher, get_course, put_course, sync_student, get_courses_by_teacher, get_students_by_course, get_assignments_by_course, put_assignment, get_assignment, get_attendance_records, put_attendance_record, get_material_targets_by_course, put_material_target, get_timetable_slots_by_course, put_timetable_slot, delete_timetable_slot, get_courses_by_google_ids
 from dotenv import load_dotenv
 import google.oauth2.credentials
 from google_auth_oauthlib.flow import Flow
@@ -157,16 +157,22 @@ def get_missing_scopes(*required_scopes):
     return [scope for scope in required_scopes if scope not in granted]
 
 
+from flask import abort
+
 def get_authenticated_teacher():
     email = session.get('user', {}).get('email')
-    return Teacher.query.filter_by(email=email).first() if email else None
+    return get_teacher(email) if email else None
 
 
 def get_owned_course_or_404(course_id):
     teacher = get_authenticated_teacher()
-    course = Course.query.get_or_404(course_id)
-    if teacher and course.teacher_id != teacher.id:
-        return None
+    if not teacher:
+        abort(401)
+    
+    course = get_course(teacher['email'], str(course_id))
+    if not course:
+        abort(404)
+        
     return course
 
 
@@ -226,8 +232,8 @@ def build_attendance_row(student_name, email, join_time, leave_time, sessions=No
     session_count = len(sessions) if sessions else (1 if join_time else 0)
     total_duration = get_total_session_minutes(sessions) if sessions else get_duration_minutes(join_time, leave_time)
     return {
-        "studentId": student.id if student else None,
-        "rollNumber": student.roll_number if student else None,
+        "studentId": student.get('id', student.get('roll_number')) if student else None,
+        "rollNumber": student.get('roll_number') if student else None,
         "studentName": student_name,
         "email": email,
         "joinTime": format_google_timestamp(join_time),
@@ -533,9 +539,7 @@ def static_proxy(path):
     else:
         return send_from_directory(app.static_folder, "index.html")
 
-# SQLite Configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///classops.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+# DynamoDB is initialized in models.py
 
 # Server-side sessions to avoid oversized cookie payloads for OAuth tokens
 session_dir = os.path.join(app.instance_path, "sessions")
@@ -550,7 +554,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True
 )
 Session(app)
-db.init_app(app)
+
 
 # ==========================================
 # API KEYS (To be filled in .env file)
@@ -577,70 +581,6 @@ SCOPES = [
 ]
 GOOGLE_REDIRECT_URI = "https://classops-5.onrender.com/api/auth/google/callback"
 
-# Initialize DB
-with app.app_context():
-    db.create_all()
-
-    # Simple migration for SQLite (Add columns if they don't exist)
-    try:
-        from sqlalchemy import text
-        with db.engine.connect() as conn:
-            # Check Teacher table
-            cols = [row[1] for row in conn.execute(text("PRAGMA table_info(teacher)")).fetchall()]
-            if 'availability' not in cols:
-                conn.execute(text("ALTER TABLE teacher ADD COLUMN availability JSON"))
-            if 'period_timings' not in cols:
-                conn.execute(text("ALTER TABLE teacher ADD COLUMN period_timings JSON"))
-            
-            # Check Course table
-            cols = [row[1] for row in conn.execute(text("PRAGMA table_info(course)")).fetchall()]
-            if 'hours_per_week' not in cols:
-                conn.execute(text("ALTER TABLE course ADD COLUMN hours_per_week INTEGER DEFAULT 3"))
-            if 'meet_link' not in cols:
-                conn.execute(text("ALTER TABLE course ADD COLUMN meet_link VARCHAR(255)"))
-            if 'meet_code' not in cols:
-                conn.execute(text("ALTER TABLE course ADD COLUMN meet_code VARCHAR(32)"))
-
-            # Check Student table
-            cols = [row[1] for row in conn.execute(text("PRAGMA table_info(student)")).fetchall()]
-            if 'email' not in cols:
-                conn.execute(text("ALTER TABLE student ADD COLUMN email VARCHAR(255)"))
-            if 'dept' not in cols:
-                conn.execute(text("ALTER TABLE student ADD COLUMN dept VARCHAR(50)"))
-            if 'batch' not in cols:
-                conn.execute(text("ALTER TABLE student ADD COLUMN batch INTEGER"))
-                
-            # Check TimetableSlot table
-            cols = [row[1] for row in conn.execute(text("PRAGMA table_info(timetable_slot)")).fetchall()]
-            if 'start_time' not in cols:
-                conn.execute(text("ALTER TABLE timetable_slot ADD COLUMN start_time VARCHAR(10)"))
-            if 'end_time' not in cols:
-                conn.execute(text("ALTER TABLE timetable_slot ADD COLUMN end_time VARCHAR(10)"))
-            if 'dept' not in cols:
-                conn.execute(text("ALTER TABLE timetable_slot ADD COLUMN dept VARCHAR(50)"))
-            if 'year' not in cols:
-                conn.execute(text("ALTER TABLE timetable_slot ADD COLUMN year INTEGER"))
-            if 'google_event_id' not in cols:
-                conn.execute(text("ALTER TABLE timetable_slot ADD COLUMN google_event_id VARCHAR(255)"))
-                
-            # Check Assignment table
-            cols = [row[1] for row in conn.execute(text("PRAGMA table_info(assignment)")).fetchall()]
-            if 'description' not in cols:
-                conn.execute(text("ALTER TABLE assignment ADD COLUMN description TEXT"))
-            if 'due_date' not in cols:
-                conn.execute(text("ALTER TABLE assignment ADD COLUMN due_date DATETIME"))
-
-            conn.commit()
-    except Exception as e:
-        app.logger.warning(f"Migration check skipped/failed: {e}")
-
-@app.route('/api/debug/reset-db', methods=['POST'])
-def reset_db():
-    with app.app_context():
-        db.drop_all()
-        db.create_all()
-    return jsonify({"message": "Database reset successfully. All tables recreated."})
-
 
 def get_classroom_service(credentials_dict=None):
     creds = ensure_google_credentials(credentials_dict)
@@ -653,18 +593,18 @@ def get_classroom_service(credentials_dict=None):
 
 
 def getMeetingLink(courseId, credentials_dict=None):
-    course = Course.query.get_or_404(courseId)
+    course = get_owned_course_or_404(courseId)
     classroom_service = get_classroom_service(credentials_dict)
     classroom_course = {}
 
-    if course.google_course_id and classroom_service:
-        classroom_course = classroom_service.courses().get(id=course.google_course_id).execute()
+    if course.get('google_course_id') and classroom_service:
+        classroom_course = classroom_service.courses().get(id=course.get('google_course_id')).execute()
 
     api_meet_link = classroom_course.get('meetLink') or classroom_course.get('meetingLink')
-    stored_meet_link = (course.meet_link or '').strip() or None
+    stored_meet_link = (course.get('meet_link') or '').strip() or None
     meeting_code = (
         normalize_meeting_code(api_meet_link)
-        or normalize_meeting_code(course.meet_code)
+        or normalize_meeting_code(course.get('meet_code'))
         or normalize_meeting_code(stored_meet_link)
     )
     meet_link = api_meet_link or stored_meet_link or build_meet_link(meeting_code)
@@ -744,9 +684,9 @@ def getAttendanceReport(meetingCode, courseId=None, credentials_dict=None):
 
     student_by_email = {}
     if courseId:
-        for student in Student.query.filter_by(course_id=courseId).all():
-            if student.email:
-                student_by_email[normalize_email(student.email)] = student
+        for student in get_students_by_course(courseId):
+            if student.get('email'):
+                student_by_email[normalize_email(student.get('email'))] = student
 
     for participant in participants:
         join_time = participant.get('earliestStartTime')
@@ -777,7 +717,7 @@ def getAttendanceReport(meetingCode, courseId=None, credentials_dict=None):
             live_present_count += 1
 
         row = build_attendance_row(
-            matched_student.name if matched_student else f"Participant {participant.get('name', '').split('/')[-1]}",
+            matched_student.get('name') if matched_student else f"Participant {participant.get('name', '').split('/')[-1]}",
             email,
             join_time,
             leave_time,
@@ -787,7 +727,7 @@ def getAttendanceReport(meetingCode, courseId=None, credentials_dict=None):
 
         if matched_student:
             attendance.append(row)
-            present_student_ids.append(matched_student.id)
+            present_student_ids.append(matched_student.get('id', matched_student.get('roll_number')))
         else:
             unmatched_participants.append(row)
 
@@ -851,26 +791,39 @@ def sync_classroom_data(credentials_dict=None):
     email = user_info.get('email')
     name = user_info.get('name', 'Unknown Teacher')
     
-    teacher = Teacher.query.filter_by(email=email).first()
+    teacher = get_teacher(email)
     if not teacher:
-        teacher = Teacher(email=email, name=name)
-        db.session.add(teacher)
-        db.session.commit()
+        teacher = {
+            "email": email,
+            "name": name,
+            "availability": {},
+            "period_timings": {}
+        }
+        put_teacher(teacher)
 
     # 2. Sync Courses
     results = service.courses().list(pageSize=10).execute()
     courses_data = results.get('courses', [])
 
     for c in courses_data:
-        existing = Course.query.filter_by(google_course_id=c['id']).first()
+        course_id = c['id']
+        existing = get_course(email, course_id)
         if not existing:
-            new_course = Course(google_course_id=c['id'], name=c['name'], teacher_id=teacher.id)
-            db.session.add(new_course)
+            new_course = {
+                "id": course_id,
+                "google_course_id": course_id,
+                "name": c['name'],
+                "teacher_id": email,
+                "hours_per_week": 3,
+                "meet_link": None,
+                "meet_code": None
+            }
+            put_course(email, new_course)
         else:
             # Ensure teacher_id is correct
-            existing.teacher_id = teacher.id
+            existing['teacher_id'] = email
+            put_course(email, existing)
             
-    db.session.commit()
     return courses_data
 
 # ==========================================
@@ -975,13 +928,17 @@ def google_auth_callback():
             session['user']['batch'] = parsed.get('batch')
             session['user']['current_year'] = parsed.get('current_year')
 
-        # Ensure teacher exists (using existing DB logic as requested)
+        # Ensure teacher exists (using DynamoDB)
         if parsed['role'] == 'teacher':
-            teacher = Teacher.query.filter_by(email=email).first()
+            teacher = get_teacher(email)
             if not teacher:
-                teacher = Teacher(email=email, name=name)
-                db.session.add(teacher)
-                db.session.commit()
+                teacher = {
+                    "email": email,
+                    "name": name,
+                    "availability": {},
+                    "period_timings": {}
+                }
+                put_teacher(teacher)
 
         try:
             sync_classroom_data(session['credentials'])
@@ -1022,11 +979,14 @@ def sync_classroom():
     
     sync_classroom_data(session['credentials'])
     email = session.get('user', {}).get('email')
-    teacher = Teacher.query.filter_by(email=email).first() if email else None
-    courses = Course.query.filter_by(teacher_id=teacher.id).all() if teacher else []
+    teacher = get_authenticated_teacher()
+    if not teacher:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    courses = get_courses_by_teacher(teacher['email'])
     return jsonify({
         "message": "Classroom synced successfully",
-        "courses": [{"id": c.id, "google_course_id": c.google_course_id, "name": c.name} for c in courses]
+        "courses": [{"id": c.get('id'), "google_course_id": c.get('google_course_id'), "name": c.get('name')} for c in courses]
     })
 
 @app.route('/api/courses', methods=['GET'])
@@ -1034,21 +994,21 @@ def get_courses():
     if 'user' not in session:
         return jsonify({"error": "Not authenticated"}), 401
     teacher = get_authenticated_teacher()
-    courses = Course.query.filter_by(teacher_id=teacher.id).all() if teacher else []
+    courses = get_courses_by_teacher(teacher['email']) if teacher else []
     return jsonify([
         {
-            "id": c.id,
-            "google_course_id": c.google_course_id,
-            "name": c.name,
-            "hours_per_week": c.hours_per_week,
-            "meet_link": c.meet_link,
-            "meeting_code": c.meet_code
+            "id": c.get('id'),
+            "google_course_id": c.get('google_course_id'),
+            "name": c.get('name'),
+            "hours_per_week": c.get('hours_per_week', 3),
+            "meet_link": c.get('meet_link'),
+            "meeting_code": c.get('meet_code')
         }
         for c in courses
     ])
 
 
-@app.route('/api/courses/<int:course_id>/meeting-config', methods=['GET', 'POST'])
+@app.route('/api/courses/<course_id>/meeting-config', methods=['GET', 'POST'])
 def course_meeting_config(course_id):
     if 'user' not in session:
         return jsonify({"error": "Not authenticated"}), 401
@@ -1065,9 +1025,10 @@ def course_meeting_config(course_id):
         if not meeting_code and not meet_link:
             return jsonify({"error": "Provide a Meet link or meeting code."}), 400
 
-        course.meet_code = meeting_code
-        course.meet_link = meet_link
-        db.session.commit()
+        course['meet_code'] = meeting_code
+        course['meet_link'] = meet_link
+        email = session.get('user', {}).get('email')
+        put_course(email, course)
 
     try:
         return jsonify(getMeetingLink(course_id)), 200
@@ -1076,7 +1037,7 @@ def course_meeting_config(course_id):
         return jsonify({"error": str(exc)}), 500
 
 
-@app.route('/api/courses/<int:course_id>/meet/attendance', methods=['GET'])
+@app.route('/api/courses/<course_id>/meet/attendance', methods=['GET'])
 def get_course_meet_attendance(course_id):
     if 'user' not in session:
         return jsonify({"error": "Not authenticated"}), 401
@@ -1128,7 +1089,7 @@ def get_course_meet_attendance(course_id):
         }), 200
 
 
-@app.route('/api/courses/<int:course_id>/meet/attendance/export', methods=['GET'])
+@app.route('/api/courses/<course_id>/meet/attendance/export', methods=['GET'])
 def export_course_meet_attendance(course_id):
     if 'user' not in session:
         return jsonify({"error": "Not authenticated"}), 401
@@ -1204,42 +1165,43 @@ def export_course_meet_attendance(course_id):
         app.logger.exception("Failed to export Meet attendance report: %s", exc)
         return jsonify({"error": str(exc)}), 500
 
-@app.route('/api/courses/<int:course_id>/sync-assignments', methods=['POST'])
+@app.route('/api/courses/<course_id>/sync-assignments', methods=['POST'])
 def sync_assignments(course_id):
     service = get_classroom_service()
     if not service:
         return jsonify({"error": "Not authenticated"}), 401
     
-    course = Course.query.get_or_404(course_id)
-    if not course.google_course_id:
+    course = get_owned_course_or_404(course_id)
+    if not course.get('google_course_id'):
         return jsonify({"error": "Course not linked to Google Classroom"}), 400
 
     try:
-        results = service.courses().courseWork().list(courseId=course.google_course_id).execute()
+        results = service.courses().courseWork().list(courseId=course['google_course_id']).execute()
         coursework_data = results.get('courseWork', [])
 
         count = 0
         for cw in coursework_data:
-            existing = Assignment.query.filter_by(google_assignment_id=cw['id']).first()
+            existing = get_assignment(course_id, cw['id'])
             if not existing:
-                new_assignment = Assignment(
-                    google_assignment_id=cw['id'],
-                    title=cw['title'],
-                    course_id=course.id
-                )
-                db.session.add(new_assignment)
+                new_assignment = {
+                    "id": cw['id'],
+                    "google_assignment_id": cw['id'],
+                    "title": cw['title'],
+                    "description": cw.get('description'),
+                    "due_date": cw.get('dueDate'),
+                    "course_id": course_id
+                }
+                put_assignment(course_id, new_assignment)
                 count += 1
-        
-        db.session.commit()
         return jsonify({"message": f"Synced {count} new assignments successfully"}), 200
     except Exception as exc:
         app.logger.exception("Assignment sync failed: %s", exc)
         return jsonify({"error": f"Classroom API error: {str(exc)}"}), 500
 
-@app.route('/api/courses/<int:course_id>/assignments', methods=['GET'])
+@app.route('/api/courses/<course_id>/assignments', methods=['GET'])
 def get_assignments(course_id):
-    assignments = Assignment.query.filter_by(course_id=course_id).all()
-    return jsonify([{"id": a.id, "google_assignment_id": a.google_assignment_id, "title": a.title} for a in assignments])
+    assignments = get_assignments_by_course(course_id)
+    return jsonify([{"id": a.get('id'), "google_assignment_id": a.get('google_assignment_id'), "title": a.get('title')} for a in assignments])
 
 @app.route('/api/assignments/check', methods=['POST'])
 def check_plagiarism():
@@ -1260,21 +1222,24 @@ def check_plagiarism():
 
     return jsonify({"error": "Provide a file upload or a text field."}), 400
 
-@app.route('/api/assignments/<int:assignment_id>/analyze', methods=['POST'])
-def analyze_submissions(assignment_id):
+@app.route('/api/courses/<course_id>/assignments/<assignment_id>/analyze', methods=['POST'])
+def analyze_submissions(course_id, assignment_id):
     from ai_checker import run_batch_analysis
     service = get_classroom_service()
     if not service:
         return jsonify({"error": "Not authenticated with Google Classroom"}), 401
     
-    assignment = Assignment.query.get_or_404(assignment_id)
-    course = assignment.course
+    assignment = get_assignment(course_id, assignment_id)
+    if not assignment:
+        return jsonify({"error": "Assignment not found"}), 404
+        
+    course = get_owned_course_or_404(course_id)
 
     try:
         # 1. Fetch submissions
         results = service.courses().courseWork().studentSubmissions().list(
-            courseId=course.google_course_id,
-            courseWorkId=assignment.google_assignment_id
+            courseId=course.get('google_course_id'),
+            courseWorkId=assignment.get('google_assignment_id')
         ).execute()
         submissions = results.get('studentSubmissions', [])
 
@@ -1282,8 +1247,8 @@ def analyze_submissions(assignment_id):
             return jsonify({"message": "No submissions found to analyze.", "results": [], "alerts": []}), 200
 
         # 2. Map student names from local DB
-        local_students = Student.query.filter_by(course_id=course.id).all()
-        student_map = {s.roll_number: s.name for s in local_students}
+        local_students = get_students_by_course(course_id)
+        student_map = {s.get('roll_number'): s.get('name') for s in local_students}
 
         # 3. Prepare data for analysis
         batch_input = []
@@ -1483,61 +1448,76 @@ def manage_targets():
         data = request.json or {}
         if not data.get('topic') or not data.get('date') or not data.get('course_id'):
             return jsonify({"error": "topic, date, and course_id are required"}), 400
-        new_target = MaterialTarget(
-            topic=data['topic'], 
-            target_date=datetime.strptime(data['date'], '%Y-%m-%d').date(),
-            course_id=data['course_id']
-        )
-        db.session.add(new_target)
-        db.session.commit()
+            
+        import uuid
+        course_id = data['course_id']
+        new_target = {
+            "id": str(uuid.uuid4()),
+            "topic": data['topic'], 
+            "target_date": data['date'],
+            "is_completed": False,
+            "course_id": course_id
+        }
+        put_material_target(course_id, new_target)
+        
+        course = get_owned_course_or_404(course_id)
         return jsonify({
-            "id": new_target.id,
-            "topic": new_target.topic,
-            "completed": new_target.is_completed,
-            "date": new_target.target_date.strftime('%Y-%m-%d'),
-            "course_id": new_target.course_id,
-            "course_name": new_target.course.name if new_target.course else None
+            "id": new_target['id'],
+            "topic": new_target['topic'],
+            "completed": new_target['is_completed'],
+            "date": new_target['target_date'],
+            "course_id": new_target['course_id'],
+            "course_name": course.get('name') if course else None
         }), 201
     
     course_id = request.args.get('course_id')
-    query = MaterialTarget.query
-    if course_id:
-        try:
-            course_id = int(course_id)
-        except ValueError:
-            return jsonify({"error": "course_id must be an integer"}), 400
-        query = query.filter_by(course_id=course_id)
-    targets = query.order_by(MaterialTarget.target_date.asc()).all()
+    if not course_id:
+        return jsonify({"error": "course_id is required"}), 400
+        
+    targets = get_material_targets_by_course(course_id)
+    targets = sorted(targets, key=lambda t: t.get('target_date', ''))
+    course = get_owned_course_or_404(course_id)
+    
     return jsonify([
         {
-            "id": t.id,
-            "topic": t.topic,
-            "completed": t.is_completed,
-            "date": t.target_date.strftime('%Y-%m-%d'),
-            "course_id": t.course_id,
-            "course_name": t.course.name if t.course else None
+            "id": t.get('id'),
+            "topic": t.get('topic'),
+            "completed": t.get('is_completed'),
+            "date": t.get('target_date'),
+            "course_id": t.get('course_id'),
+            "course_name": course.get('name') if course else None
         }
         for t in targets
     ])
 
-@app.route('/api/targets/<int:target_id>', methods=['PATCH'])
-def update_target(target_id):
+@app.route('/api/courses/<course_id>/targets/<target_id>', methods=['PATCH'])
+def update_target(course_id, target_id):
     data = request.json or {}
-    target = MaterialTarget.query.get_or_404(target_id)
+    
+    # We must fetch the existing target first
+    targets = get_material_targets_by_course(course_id)
+    target = next((t for t in targets if str(t.get('id')) == str(target_id)), None)
+    
+    if not target:
+        return jsonify({"error": "Target not found"}), 404
+        
     if 'topic' in data and data['topic']:
-        target.topic = data['topic']
+        target['topic'] = data['topic']
     if 'date' in data and data['date']:
-        target.target_date = datetime.strptime(data['date'], '%Y-%m-%d').date()
+        target['target_date'] = data['date']
     if 'completed' in data:
-        target.is_completed = bool(data['completed'])
-    db.session.commit()
+        target['is_completed'] = bool(data['completed'])
+        
+    put_material_target(course_id, target)
+    course = get_owned_course_or_404(course_id)
+    
     return jsonify({
-        "id": target.id,
-        "topic": target.topic,
-        "completed": target.is_completed,
-        "date": target.target_date.strftime('%Y-%m-%d'),
-        "course_id": target.course_id,
-        "course_name": target.course.name if target.course else None
+        "id": target['id'],
+        "topic": target['topic'],
+        "completed": target['is_completed'],
+        "date": target['target_date'],
+        "course_id": target['course_id'],
+        "course_name": course.get('name') if course else None
     }), 200
 
 # ==========================================
@@ -1547,20 +1527,23 @@ def update_target(target_id):
 # ==========================================
 
 def compute_compliance_metrics(course_id=None):
-    targets_query = MaterialTarget.query
-    attendance_query = Attendance.query
+    if not course_id:
+        return {
+            "co_coverage": 0, "po_mapping": 0, "status": "Select a course",
+            "completed_targets": 0, "pending_targets": 0, "total_targets": 0,
+            "attendance_records": 0, "present_records": 0
+        }
 
-    if course_id:
-        targets_query = targets_query.filter_by(course_id=course_id)
-        attendance_query = attendance_query.filter_by(course_id=course_id)
+    targets = get_material_targets_by_course(course_id)
+    attendance = get_attendance_records(course_id)
 
-    total_targets = targets_query.count()
-    completed_targets = targets_query.filter_by(is_completed=True).count()
+    total_targets = len(targets)
+    completed_targets = len([t for t in targets if t.get('is_completed')])
     pending_targets = max(0, total_targets - completed_targets)
     co_coverage = round((completed_targets / total_targets) * 100) if total_targets else 0
 
-    total_attendance = attendance_query.count()
-    present_count = attendance_query.filter_by(status='Present').count()
+    total_attendance = len(attendance)
+    present_count = len([a for a in attendance if a.get('status') == 'Present'])
     po_mapping = round((present_count / total_attendance) * 100) if total_attendance else 0
 
     if total_targets == 0:
@@ -1581,30 +1564,32 @@ def compute_compliance_metrics(course_id=None):
 
 
 def collect_report_data(course_id=None):
-    if course_id:
-        courses = Course.query.filter_by(id=course_id).all()
-        students = Student.query.filter_by(course_id=course_id).all()
-        targets = MaterialTarget.query.filter_by(course_id=course_id).all()
-        assignments = Assignment.query.filter_by(course_id=course_id).all()
-        slots = TimetableSlot.query.filter_by(course_id=course_id).all()
-        attendance_records = Attendance.query.filter_by(course_id=course_id).all()
-    else:
-        courses = Course.query.all()
-        students = Student.query.all()
-        targets = MaterialTarget.query.all()
-        assignments = Assignment.query.all()
-        slots = TimetableSlot.query.all()
-        attendance_records = Attendance.query.all()
+    if not course_id:
+        return {
+            "courses": [], "students": [], "targets": [], 
+            "assignments": [], "timetable_slots": [],
+            "attendance_summary": [], "attendance_records": []
+        }
+        
+    course = get_owned_course_or_404(course_id)
+    courses = [course] if course else []
+    students = get_students_by_course(course_id)
+    targets = get_material_targets_by_course(course_id)
+    assignments = get_assignments_by_course(course_id)
+    slots = get_timetable_slots_by_course(course_id)
+    attendance_records = get_attendance_records(course_id)
 
     attendance_summary = []
     for student in students:
-        total_classes = Attendance.query.filter_by(student_id=student.id, course_id=student.course_id).count()
-        present_count = Attendance.query.filter_by(student_id=student.id, course_id=student.course_id, status='Present').count()
+        roll = student.get('roll_number')
+        student_attendance = [a for a in attendance_records if a.get('student_id') == roll]
+        total_classes = len(student_attendance)
+        present_count = len([a for a in student_attendance if a.get('status') == 'Present'])
         percentage = round((present_count / total_classes) * 100, 1) if total_classes else 0
         attendance_summary.append({
-            "name": student.name,
-            "roll_number": student.roll_number,
-            "course_id": student.course_id,
+            "name": student.get('name'),
+            "roll_number": roll,
+            "course_id": course_id,
             "total_classes": total_classes,
             "present_count": present_count,
             "percentage": percentage
@@ -1650,8 +1635,8 @@ def generate_compliance_report():
         return jsonify({"error": "PDF generation requires reportlab. Install it and restart the backend."}), 500
     metrics = compute_compliance_metrics(course_id)
     data = collect_report_data(course_id)
-    student_map = {s.id: s for s in data['students']}
-    course_map = {c.id: c for c in data['courses']}
+    student_map = {s.get('id', s.get('roll_number')): s for s in data['students']}
+    course_map = {c.get('id'): c for c in data['courses']}
 
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=letter)
@@ -1671,7 +1656,7 @@ def generate_compliance_report():
     write_line("ClassOps NBA/NAAC Compliance Report")
     write_line(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     if course_id and data['courses']:
-        write_line(f"Course: {data['courses'][0].name}")
+        write_line(f"Course: {data['courses'][0].get('name')}")
     write_line("")
 
     write_line("Compliance Metrics")
@@ -1683,7 +1668,7 @@ def generate_compliance_report():
     write_line("Courses")
     if data['courses']:
         for course in data['courses']:
-            write_line(f"- {course.name} (ID: {course.id})")
+            write_line(f"- {course.get('name')} (ID: {course.get('id')})")
     else:
         write_line("No courses found.")
     write_line("")
@@ -1691,9 +1676,9 @@ def generate_compliance_report():
     write_line("Students")
     if data['students']:
         for student in data['students']:
-            course = course_map.get(student.course_id)
-            course_name = course.name if course else f"Course {student.course_id}"
-            write_line(f"- {student.name} ({student.roll_number}) | {course_name}")
+            course = course_map.get(student.get('course_id'))
+            course_name = course.get('name') if course else f"Course {student.get('course_id')}"
+            write_line(f"- {student.get('name')} ({student.get('roll_number')}) | {course_name}")
     else:
         write_line("No students found.")
     write_line("")
@@ -1701,9 +1686,10 @@ def generate_compliance_report():
     write_line("Syllabus Targets")
     if data['targets']:
         for target in data['targets']:
-            status = "Completed" if target.is_completed else "Pending"
-            course_name = target.course.name if target.course else ""
-            write_line(f"- {target.topic} | Due: {target.target_date} | {status} | {course_name}")
+            status = "Completed" if target.get('is_completed') else "Pending"
+            course = course_map.get(target.get('course_id'))
+            course_name = course.get('name') if course else ""
+            write_line(f"- {target.get('topic')} | Due: {target.get('target_date')} | {status} | {course_name}")
     else:
         write_line("No targets found.")
     write_line("")
@@ -1719,11 +1705,11 @@ def generate_compliance_report():
     write_line("Attendance Records")
     if data['attendance_records']:
         for record in data['attendance_records']:
-            student = student_map.get(record.student_id)
-            course = course_map.get(record.course_id)
-            student_label = f"{student.name} ({student.roll_number})" if student else f"Student {record.student_id}"
-            course_label = course.name if course else f"Course {record.course_id}"
-            write_line(f"- {record.date} | {student_label} | {course_label} | {record.status}")
+            student = student_map.get(record.get('student_id'))
+            course = course_map.get(record.get('course_id'))
+            student_label = f"{student.get('name')} ({student.get('roll_number')})" if student else f"Student {record.get('student_id')}"
+            course_label = course.get('name') if course else f"Course {record.get('course_id')}"
+            write_line(f"- {record.get('date')} | {student_label} | {course_label} | {record.get('status')}")
     else:
         write_line("No attendance records found.")
     write_line("")
@@ -1731,7 +1717,7 @@ def generate_compliance_report():
     write_line("Assignments")
     if data['assignments']:
         for assignment in data['assignments']:
-            write_line(f"- {assignment.title} (Course ID: {assignment.course_id})")
+            write_line(f"- {assignment.get('title')} (Course ID: {assignment.get('course_id')})")
     else:
         write_line("No assignments found.")
     write_line("")
@@ -1739,8 +1725,9 @@ def generate_compliance_report():
     write_line("Timetable")
     if data['timetable_slots']:
         for slot in data['timetable_slots']:
-            course_name = slot.course.name if slot.course else ""
-            write_line(f"- {slot.day} P{slot.period + 1}: {slot.subject} ({course_name})")
+            course = course_map.get(slot.get('course_id'))
+            course_name = course.get('name') if course else ""
+            write_line(f"- {slot.get('day')} P{slot.get('period') + 1}: {slot.get('subject')} ({course_name})")
     else:
         write_line("No timetable slots found.")
 
@@ -1749,7 +1736,7 @@ def generate_compliance_report():
 
     filename = "nba_compliance_report.pdf"
     if course_id and data['courses']:
-        safe_name = "_".join(data['courses'][0].name.lower().split())
+        safe_name = "_".join(data['courses'][0].get('name', '').lower().split())
         filename = f"nba_compliance_report_{safe_name}.pdf"
 
     return send_file(
@@ -1769,10 +1756,10 @@ def get_attendance():
         return jsonify({"error": "course_id is required"}), 400
         
     date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
-    records = Attendance.query.filter_by(course_id=course_id, date=date_obj).all()
+    records = get_attendance_records(course_id, date_str)
     
     return jsonify({
-        "records": {r.student_id: r.status for r in records},
+        "records": {r.get('student_id'): r.get('status') for r in records},
         "date": date_str,
         "course_id": course_id
     }), 200
@@ -1788,42 +1775,35 @@ def mark_attendance():
         return jsonify({"error": "course_id and records are required"}), 400
 
     for record in data['records']: # List of {student_id, status}
-        # Check if record already exists for this student on this date
-        existing = Attendance.query.filter_by(
-            student_id=record['student_id'], 
-            course_id=course_id, 
-            date=date_obj
-        ).first()
-        
-        if existing:
-            existing.status = record['status']
-        else:
-            att = Attendance(
-                student_id=record['student_id'], 
-                course_id=course_id, 
-                status=record['status'], 
-                date=date_obj
-            )
-            db.session.add(att)
+        new_record = {
+            "student_id": record['student_id'],
+            "course_id": course_id,
+            "status": record['status'],
+            "date": date_str
+        }
+        put_attendance_record(course_id, new_record)
             
-    db.session.commit()
     return jsonify({"message": "Attendance recorded successfully"}), 200
 
-@app.route('/api/attendance/report/<int:course_id>', methods=['GET'])
+@app.route('/api/attendance/report/<course_id>', methods=['GET'])
 def get_attendance_report(course_id):
-    students = Student.query.filter_by(course_id=course_id).all()
+    students = get_students_by_course(course_id)
+    all_attendance = get_attendance_records(course_id)
     report = []
     
     for s in students:
-        total_classes = Attendance.query.filter_by(student_id=s.id, course_id=course_id).count()
-        present_count = Attendance.query.filter_by(student_id=s.id, course_id=course_id, status='Present').count()
+        roll_number = s.get('roll_number')
+        # filter all_attendance for this student
+        student_attendance = [a for a in all_attendance if a.get('student_id') == roll_number]
+        total_classes = len(student_attendance)
+        present_count = len([a for a in student_attendance if a.get('status') == 'Present'])
         
         percentage = (present_count / total_classes * 100) if total_classes > 0 else 0
         
         report.append({
-            "student_id": s.id,
-            "name": s.name,
-            "roll_number": s.roll_number,
+            "student_id": s.get('id', roll_number),
+            "name": s.get('name'),
+            "roll_number": roll_number,
             "total": total_classes,
             "present": present_count,
             "percentage": round(percentage, 2)
@@ -1856,6 +1836,9 @@ def sync_students_for_course(course_id):
             if not next_page_token:
                 break
 
+        existing_students = get_students_by_course(course_id)
+        existing_rolls = {s.get('roll_number'): s for s in existing_students}
+        
         count = 0
         for s_data in students_data:
             # userId is always present in a Student resource
@@ -1867,35 +1850,35 @@ def sync_students_for_course(course_id):
             name = profile.get('name', {}).get('fullName', 'Unknown Student')
             email = normalize_email(profile.get('emailAddress'))
             
-            # Check if student exists in this course
-            existing = Student.query.filter_by(roll_number=student_id_google, course_id=course.id).first()
+            existing = existing_rolls.get(student_id_google)
             if not existing:
-                new_student = Student(
-                    roll_number=student_id_google, 
-                    name=name, 
-                    email=email,
-                    course_id=course.id
-                )
-                db.session.add(new_student)
+                new_student = {
+                    "id": student_id_google,
+                    "roll_number": student_id_google, 
+                    "name": name, 
+                    "email": email,
+                    "course_id": course_id
+                }
+                sync_student(course_id, new_student)
                 count += 1
             else:
-                existing.name = name
-                existing.email = email or existing.email
+                existing['name'] = name
+                existing['email'] = email or existing.get('email')
+                sync_student(course_id, existing)
         
-        db.session.commit()
         return jsonify({"message": f"Synced {count} new students successfully"}), 200
     except Exception as exc:
         app.logger.exception("Student sync failed: %s", exc)
         return jsonify({"error": f"Classroom API error: {str(exc)}"}), 500
 
-@app.route('/api/courses/<int:course_id>/students', methods=['GET'])
+@app.route('/api/courses/<course_id>/students', methods=['GET'])
 def get_students(course_id):
-    students = Student.query.filter_by(course_id=course_id).all()
+    students = get_students_by_course(course_id)
     return jsonify([{
-        "id": s.id,
-        "name": s.name,
-        "roll_number": s.roll_number,
-        "email": s.email
+        "id": s.get('id', s.get('roll_number')),
+        "name": s.get('name'),
+        "roll_number": s.get('roll_number'),
+        "email": s.get('email')
     } for s in students]), 200
 
 # ==========================================
@@ -1903,67 +1886,63 @@ def get_students(course_id):
 # ==========================================
 @app.route('/api/teacher/profile', methods=['GET', 'POST'])
 def teacher_profile():
-    if 'user' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
-    
-    email = session['user'].get('email')
-    teacher = Teacher.query.filter_by(email=email).first()
+    teacher = get_authenticated_teacher()
     if not teacher:
-        return jsonify({"error": "Teacher not found"}), 404
+        return jsonify({"error": "Teacher not found or not authenticated"}), 401
 
     if request.method == 'POST':
         data = request.json
         if 'availability' in data:
-            teacher.availability = data['availability']
+            teacher['availability'] = data['availability']
         if 'period_timings' in data:
-            teacher.period_timings = normalize_period_timings(data['period_timings'])
+            teacher['period_timings'] = normalize_period_timings(data['period_timings'])
         if 'name' in data:
-            teacher.name = data['name']
+            teacher['name'] = data['name']
+            
+        put_teacher(teacher)
         
         # Also update hours_per_week for courses if provided
         if 'courses' in data:
             for c_data in data['courses']:
-                course = Course.query.get(c_data['id'])
-                if course and course.teacher_id == teacher.id:
+                course = get_course(teacher['email'], c_data['id'])
+                if course:
                     try:
-                        parsed_hours = int(c_data.get('hours', course.hours_per_week))
+                        parsed_hours = int(c_data.get('hours', course.get('hours_per_week', 0)))
                     except (TypeError, ValueError):
-                        parsed_hours = course.hours_per_week
-                    course.hours_per_week = max(parsed_hours, 0)
+                        parsed_hours = course.get('hours_per_week', 0)
+                    course['hours_per_week'] = max(parsed_hours, 0)
+                    put_course(teacher['email'], course)
         
-        db.session.commit()
         return jsonify({"message": "Profile updated successfully"})
 
     # GET request
+    courses = get_courses_by_teacher(teacher['email'])
     return jsonify({
-        "name": teacher.name,
-        "availability": teacher.availability or {day: [] for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]},
-        "period_timings": normalize_period_timings(teacher.period_timings),
-        "courses": [{"id": c.id, "name": c.name, "hours": c.hours_per_week} for c in teacher.courses]
+        "name": teacher.get('name', ''),
+        "availability": teacher.get('availability', {}) or {day: [] for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]},
+        "period_timings": normalize_period_timings(teacher.get('period_timings', [])),
+        "courses": [{"id": c.get('id'), "name": c.get('name'), "hours": c.get('hours_per_week', 0)} for c in courses]
     })
 
 @app.route('/api/timetable/generate', methods=['POST'])
 def generate_timetable():
     from scheduler import run_backtracking_scheduler
     
-    if 'user' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
-    
-    email = session['user'].get('email')
-    teacher = Teacher.query.filter_by(email=email).first()
+    teacher = get_authenticated_teacher()
     if not teacher:
-        return jsonify({"error": "Teacher not found"}), 404
+        return jsonify({"error": "Teacher not found or not authenticated"}), 401
 
     # Prepare inputs for scheduler
-    availability = teacher.availability or {}
+    availability = teacher.get('availability', {}) or {}
+    courses = get_courses_by_teacher(teacher['email'])
     courses_to_schedule = []
-    for c in teacher.courses:
-        hours = max(int(c.hours_per_week or 0), 0)
+    for c in courses:
+        hours = max(int(c.get('hours_per_week', 0) or 0), 0)
         if hours <= 0:
             continue
         courses_to_schedule.append({
-            'id': c.id,
-            'name': c.name,
+            'id': c.get('id'),
+            'name': c.get('name'),
             'hours': hours
         })
 
@@ -1977,89 +1956,76 @@ def generate_timetable():
         return jsonify({"error": "Could not generate a feasible timetable. Try increasing availability."}), 400
 
     # Persist timetable
-    # 1. Clear old timetable
-    if teacher.timetable:
-        db.session.delete(teacher.timetable)
+    # 1. Clear old timetable slots for all courses of this teacher
+    for c in courses:
+        old_slots = get_timetable_slots_by_course(c['id'])
+        for slot in old_slots:
+            delete_timetable_slot(c['id'], slot['id'])
     
-    # 2. Create new one
-    timetable = Timetable(teacher_id=teacher.id)
-    db.session.add(timetable)
-    db.session.commit() # Get timetable ID
-
+    # 2. Create new ones
+    import uuid
     for slot in new_slots:
-        ts = TimetableSlot(
-            timetable_id=timetable.id,
-            day=slot['day'],
-            period=slot['period'],
-            course_id=slot['course_id'],
-            subject=slot['subject']
-        )
-        db.session.add(ts)
-    
-    db.session.commit()
+        ts = {
+            "id": str(uuid.uuid4()),
+            "day": slot['day'],
+            "period": slot['period'],
+            "course_id": slot['course_id'],
+            "subject": slot['subject']
+        }
+        put_timetable_slot(slot['course_id'], ts)
 
-    return jsonify({"message": "Timetable generated and saved.", "timetable_id": timetable.id})
+    return jsonify({"message": "Timetable generated and saved."})
 
 @app.route('/api/timetable', methods=['GET'])
 def get_timetable():
-    if 'user' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
-    
-    email = session['user'].get('email')
-    teacher = Teacher.query.filter_by(email=email).first()
+    teacher = get_authenticated_teacher()
     if not teacher:
-        return jsonify({"error": "Teacher not found"}), 404
-    if not teacher.timetable:
-        return jsonify({
-            "message": "No timetable found.",
-            "timetable": {},
-            "availability": teacher.availability or {day: [] for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]},
-            "period_timings": normalize_period_timings(teacher.period_timings)
-        }), 200
+        return jsonify({"error": "Teacher not found or not authenticated"}), 401
+
+    availability = teacher.get('availability', {}) or {day: [] for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]}
+    period_timings = teacher.get('period_timings', [])
+    courses = get_courses_by_teacher(teacher['email'])
 
     # Format into a nested dict for frontend
     result = {}
     # Initialize with course IDs
-    for c in teacher.courses:
-        if (c.hours_per_week or 0) <= 0:
+    for c in courses:
+        if max(int(c.get('hours_per_week', 0) or 0), 0) <= 0:
             continue
-        result[c.id] = {day: {} for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]}
+        result[c['id']] = {day: {} for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]}
     
-    for slot in teacher.timetable.slots:
-        if slot.course_id not in result:
-            result[slot.course_id] = {day: {} for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]}
+    # Collect all slots for all courses
+    all_slots = []
+    for c in courses:
+        slots = get_timetable_slots_by_course(c['id'])
+        for slot in slots:
+            slot['course'] = c # Attach course info
+            all_slots.append(slot)
+            
+    for slot in all_slots:
+        if slot['course_id'] not in result:
+            result[slot['course_id']] = {day: {} for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]}
         
-        result[slot.course_id][slot.day][slot.period] = {
-            "slot_id": slot.id,
-            "course_id": slot.course_id,
-            "sub": slot.subject,
-            "className": slot.course.name,
-            "meetLink": slot.course.meet_link,
-            "meetingCode": slot.course.meet_code
+        c = slot['course']
+        result[slot['course_id']][slot['day']][slot['period']] = {
+            "slot_id": slot['id'],
+            "course_id": slot['course_id'],
+            "sub": slot['subject'],
+            "className": c.get('name'),
+            "meetLink": c.get('meet_link'),
+            "meetingCode": c.get('meet_code')
         }
 
     return jsonify({
         "timetable": result,
-        "availability": teacher.availability or {day: [] for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]},
-        "period_timings": normalize_period_timings(teacher.period_timings)
+        "availability": availability,
+        "period_timings": normalize_period_timings(period_timings)
     })
-
-
-@app.route('/api/timetable/slot', methods=['POST'])
+@app.route('/api/timetable/slot', methods=['POST'])
 def upsert_timetable_slot():
-    if 'user' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
-
-    email = session['user'].get('email')
-    teacher = Teacher.query.filter_by(email=email).first()
+    teacher = get_authenticated_teacher()
     if not teacher:
-        return jsonify({"error": "Teacher not found"}), 404
-    if not teacher.timetable:
-        timetable = Timetable(teacher_id=teacher.id)
-        db.session.add(timetable)
-        db.session.commit()
-    else:
-        timetable = teacher.timetable
+        return jsonify({"error": "Teacher not found or not authenticated"}), 401
 
     data = request.json or {}
     day = data.get('day')
@@ -2071,34 +2037,59 @@ def upsert_timetable_slot():
     if day not in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]:
         return jsonify({"error": "Invalid day"}), 400
 
-    existing_slot = TimetableSlot.query.filter_by(timetable_id=timetable.id, day=day, period=period).first()
     course_id = data.get('course_id')
+    courses = get_courses_by_teacher(teacher['email'])
+    
+    # Check if a slot for this day/period exists across ANY of the teacher's courses
+    existing_slot_course_id = None
+    existing_slot = None
+    for c in courses:
+        slots = get_timetable_slots_by_course(c['id'])
+        for s in slots:
+            if s.get('day') == day and s.get('period') == period:
+                existing_slot = s
+                existing_slot_course_id = c['id']
+                break
+        if existing_slot:
+            break
+
     if not course_id:
         if existing_slot:
-            db.session.delete(existing_slot)
-            db.session.commit()
+            delete_timetable_slot(existing_slot_course_id, existing_slot['id'])
         return jsonify({"message": "Timetable slot cleared."}), 200
 
-    course = Course.query.get(course_id)
-    if not course or course.teacher_id != teacher.id:
+    course = get_owned_course_or_404(course_id)
+    if not course:
         return jsonify({"error": "Invalid course"}), 400
-    if (course.hours_per_week or 0) <= 0:
+    if max(int(course.get('hours_per_week', 0) or 0), 0) <= 0:
         return jsonify({"error": "This class is inactive. Set hours above 0 before assigning it."}), 400
 
+    import uuid
     if existing_slot:
-        existing_slot.course_id = course.id
-        existing_slot.subject = course.name
+        # If the course changed, delete the old one
+        if str(existing_slot_course_id) != str(course_id):
+            delete_timetable_slot(existing_slot_course_id, existing_slot['id'])
+            new_slot = {
+                "id": str(uuid.uuid4()),
+                "day": day,
+                "period": period,
+                "course_id": course_id,
+                "subject": course.get('name')
+            }
+            put_timetable_slot(course_id, new_slot)
+        else:
+            existing_slot['subject'] = course.get('name')
+            put_timetable_slot(course_id, existing_slot)
     else:
-        new_slot = TimetableSlot(
-            timetable_id=timetable.id,
-            day=day,
-            period=period,
-            course_id=course.id,
-            subject=course.name
-        )
-        db.session.add(new_slot)
+        new_slot = {
+            "id": str(uuid.uuid4()),
+            "day": day,
+            "period": period,
+            "course_id": course_id,
+            "subject": course.get('name')
+        }
+        put_timetable_slot(course_id, new_slot)
 
-    db.session.commit()
     return jsonify({"message": "Timetable slot updated."}), 200
 
 @app.route('/api/config/update-key', methods=['POST'])
@@ -2279,22 +2270,23 @@ def student_dashboard():
     # Fetch personalized timetable
     timetable_data = []
     if enrolled_gc_ids:
-        local_courses = Course.query.filter(Course.google_course_id.in_(enrolled_gc_ids)).all()
-        local_course_ids = [c.id for c in local_courses]
+        local_courses = get_courses_by_google_ids(enrolled_gc_ids)
+        local_course_ids = [c.get('id') for c in local_courses]
         
         if local_course_ids:
-            slots = TimetableSlot.query.filter(TimetableSlot.course_id.in_(local_course_ids)).all()
-            for slot in slots:
-                timetable_data.append({
-                    "id": slot.id,
-                    "day": slot.day,
-                    "start_time": slot.start_time,
-                    "end_time": slot.end_time,
-                    "subject": slot.subject,
-                    "google_event_id": slot.google_event_id,
-                    "meet_link": slot.course.meet_link if slot.course else None,
-                    "meet_code": slot.course.meet_code if slot.course else None
-                })
+            for local_course in local_courses:
+                slots = get_timetable_slots_by_course(local_course.get('id'))
+                for slot in slots:
+                    timetable_data.append({
+                        "id": slot.get('id'),
+                        "day": slot.get('day'),
+                        "start_time": slot.get('start_time'), # Deprecated fields but keeping for backwards compatibility if needed
+                        "end_time": slot.get('end_time'),
+                        "subject": slot.get('subject'),
+                        "google_event_id": slot.get('google_event_id'),
+                        "meet_link": local_course.get('meet_link'),
+                        "meet_code": local_course.get('meet_code')
+                    })
 
     return jsonify({
         "user": user_info,
@@ -2309,81 +2301,7 @@ def student_dashboard():
 # 7. TEACHER TIMETABLE API
 # ==========================================
 
-@app.route('/api/teacher/timetable', methods=['GET', 'POST'])
-def manage_timetable():
-    if 'user' not in session or session['user'].get('role') != 'teacher':
-        return jsonify({"error": "Unauthorized. Teacher access required."}), 403
-        
-    email = session['user']['email']
-    teacher = Teacher.query.filter_by(email=email).first()
-    
-    if request.method == 'GET':
-        if not teacher or not teacher.timetable:
-            return jsonify([])
-        slots = TimetableSlot.query.filter_by(timetable_id=teacher.timetable.id).all()
-        return jsonify([{
-            "id": s.id, "day": s.day, "start_time": s.start_time, "end_time": s.end_time,
-            "dept": s.dept, "year": s.year, "subject": s.subject, "google_event_id": s.google_event_id
-        } for s in slots])
-        
-    if request.method == 'POST':
-        data = request.json or {}
-        
-        if not teacher.timetable:
-            teacher.timetable = Timetable(teacher_id=teacher.id)
-            db.session.add(teacher.timetable)
-            db.session.commit()
-            
-        new_slot = TimetableSlot(
-            timetable_id=teacher.timetable.id,
-            day=data.get('day'),
-            start_time=data.get('start_time'),
-            end_time=data.get('end_time'),
-            dept=data.get('dept'),
-            year=data.get('year'),
-            subject=data.get('subject')
-        )
-        db.session.add(new_slot)
-        db.session.commit()
-        
-        # Sync to Teacher's Google Calendar
-        if 'credentials' in session:
-            try:
-                creds = google.oauth2.credentials.Credentials(**session['credentials'])
-                calendar_service = build('calendar', 'v3', credentials=creds)
-                
-                # Find the next date for the given day
-                import datetime as dt
-                days_of_week = {"Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3, "Friday": 4, "Saturday": 5, "Sunday": 6}
-                today = dt.date.today()
-                target_day = days_of_week.get(new_slot.day, 0)
-                days_ahead = target_day - today.weekday()
-                if days_ahead <= 0:
-                    days_ahead += 7
-                next_date = today + dt.timedelta(days_ahead)
-                date_str = next_date.isoformat()
-                
-                event = {
-                    'summary': f"[{new_slot.dept} Y{new_slot.year}] {new_slot.subject}",
-                    'description': 'ClassOps Auto-generated Class',
-                    'start': {
-                        'dateTime': f"{date_str}T{new_slot.start_time}:00", 
-                        'timeZone': 'Asia/Kolkata',
-                    },
-                    'end': {
-                        'dateTime': f"{date_str}T{new_slot.end_time}:00",
-                        'timeZone': 'Asia/Kolkata',
-                    },
-                    'recurrence': ['RRULE:FREQ=WEEKLY'],
-                }
-                
-                created_event = calendar_service.events().insert(calendarId='primary', body=event).execute()
-                new_slot.google_event_id = created_event.get('id')
-                db.session.commit()
-            except Exception as e:
-                app.logger.exception("Failed to sync to Google Calendar")
-                
-        return jsonify({"message": "Timetable slot added", "id": new_slot.id}), 201
+
 
 # ==========================================
 # 8. STUDENT CALENDAR SYNC
