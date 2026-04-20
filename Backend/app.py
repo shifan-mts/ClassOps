@@ -4,10 +4,11 @@ os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 # 2. Relax token scope checking to prevent errors when Google drops unverified scopes
 os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
 
-from flask import Flask, request, jsonify, redirect, url_for, session, send_file, make_response
+from flask import Flask,send_from_directory, request, jsonify, redirect, url_for, session, send_file, make_response
 from flask_cors import CORS
 from flask_session import Session
 import logging
+
 from models import db, Teacher, Course, Student, Attendance, MaterialTarget, StudentMetric, Assignment, Timetable, TimetableSlot
 from dotenv import load_dotenv
 import google.oauth2.credentials
