@@ -520,8 +520,15 @@ logging.basicConfig(
 CORS(app, supports_credentials=True)
 
 @app.route('/')
-def index():
-    return "ClassOps is running 🚀"
+def serve():
+    return send_from_directory(app.static_folder, "index.html")
+@app.route("/<path:path>")
+def static_proxy(path):
+    file_path = os.path.join(app.static_folder, path)
+    if os.path.exists(file_path):
+        return send_from_directory(app.static_folder, path)
+    else:
+        return send_from_directory(app.static_folder, "index.html")
 
 # SQLite Configuration
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///classops.db'

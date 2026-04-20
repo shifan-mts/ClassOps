@@ -16,7 +16,8 @@ docx2txt
 flask-session
 scikit-learn
 transformers
-
+torch
+torchvision
 
 reportlab
 google-genai
