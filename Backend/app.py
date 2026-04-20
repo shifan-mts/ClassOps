@@ -508,7 +508,7 @@ def get_drive_service(credentials_dict=None):
         return None
     return build('drive', 'v3', credentials=creds)
 
-app = Flask(__name__)
+
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'super_secret_dev_key')
 
 # Basic logging for production visibility
@@ -519,10 +519,11 @@ logging.basicConfig(
 
 # Enable CORS for all routes (Render production and local dev)
 CORS(app, supports_credentials=True)
+app = Flask(__name__, static_folder="dist", static_url_path="")
+@app.route("/")
+def home():
+    return "Server working ✅"
 
-@app.route('/')
-def serve():
-    return send_from_directory(app.static_folder, "index.html")
 @app.route("/<path:path>")
 def static_proxy(path):
     file_path = os.path.join(app.static_folder, path)
