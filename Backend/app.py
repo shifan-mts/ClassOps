@@ -922,16 +922,23 @@ def google_auth_callback():
         return jsonify({"error": "Missing OAuth code verifier. Please try again."}), 400
 
     try:
-        # Use state from request URL to prevent CSRF mismatch errors caused by React StrictMode double-fetching
+        # Use state from request URL to prevent CSRF mismatch errors
         url_state = request.args.get('state')
         flow = Flow.from_client_secrets_file(
             CLIENT_SECRETS_FILE, scopes=SCOPES, state=url_state or state
         )
         flow.redirect_uri = GOOGLE_REDIRECT_URI
         
-        # Ensure we use the exact redirect URI origin to avoid mismatch
+        # Determine the current base URL for redirecting back to the frontend
+        # This checks if the app is running on Render; otherwise defaults to localhost
+        frontend_url = "https://classops-5.onrender.com" if "onrender.com" in request.host else "http://localhost:5173"
+        
         authorization_response = request.url
-        if GOOGLE_REDIRECT_URI.startswith('http://localhost') and '127.0.0.1' in authorization_response:
+        
+        # Standardize URL to HTTPS for production or fix localhost mismatches
+        if "onrender.com" in authorization_response:
+            authorization_response = authorization_response.replace('http://', 'https://')
+        elif '127.0.0.1' in authorization_response:
             authorization_response = authorization_response.replace('127.0.0.1', 'localhost')
         
         flow.fetch_token(authorization_response=authorization_response, code_verifier=code_verifier)
@@ -955,7 +962,7 @@ def google_auth_callback():
         # Role Check via Email Parsing
         parsed = parse_jerusalem_email(email)
         
-        # Hardcode specific email to bypass for testing/owner access as teacher
+        # Owner bypass
         if email == "angelinehephzibahj@gmail.com":
             parsed['role'] = 'teacher'
             
@@ -968,7 +975,7 @@ def google_auth_callback():
             session['user']['batch'] = parsed.get('batch')
             session['user']['current_year'] = parsed.get('current_year')
 
-        # Ensure teacher exists if role is teacher
+        # Ensure teacher exists (using existing DB logic as requested)
         if parsed['role'] == 'teacher':
             teacher = Teacher.query.filter_by(email=email).first()
             if not teacher:
@@ -981,7 +988,9 @@ def google_auth_callback():
         except Exception as exc:
             app.logger.exception("Classroom sync failed: %s", exc)
         
-        return redirect('http://localhost:5173/') # Redirect to React App
+        # FIXED: Dynamic redirect back to the correct frontend
+        return redirect(f"{frontend_url}/") 
+        
     except Exception as e:
         app.logger.exception("OAuth callback error: %s", e)
         return jsonify({"error": str(e)}), 500
