@@ -575,7 +575,7 @@ SCOPES = [
     'https://www.googleapis.com/auth/userinfo.profile',
     'https://www.googleapis.com/auth/drive.file'
 ]
-GOOGLE_REDIRECT_URI = "http://localhost:5000/api/auth/google/callback"
+GOOGLE_REDIRECT_URI = "https://classops-5.onrender.com/api/auth/google/callback"
 
 # Initialize DB
 with app.app_context():
