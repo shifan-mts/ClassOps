@@ -7,6 +7,7 @@ os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
 from flask import Flask, request, jsonify, redirect, url_for, session, send_file, make_response
 from flask_cors import CORS
 from flask_session import Session
+import logging
 from models import db, Teacher, Course, Student, Attendance, MaterialTarget, StudentMetric, Assignment, Timetable, TimetableSlot
 from dotenv import load_dotenv
 import google.oauth2.credentials
@@ -508,7 +509,19 @@ def get_drive_service(credentials_dict=None):
 
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'super_secret_dev_key')
-CORS(app, supports_credentials=True, origins=["http://localhost:5173", "http://127.0.0.1:5173"])
+
+# Basic logging for production visibility
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Enable CORS for all routes (Render production and local dev)
+CORS(app, supports_credentials=True)
+
+@app.route('/')
+def index():
+    return "ClassOps is running 🚀"
 
 # SQLite Configuration
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///classops.db'
@@ -2413,4 +2426,9 @@ def sync_student_calendar():
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.logger.info(f"Starting ClassOps backend on port {port}")
+    try:
+        app.run(host="0.0.0.0", port=port)
+    except Exception as e:
+        app.logger.error(f"Failed to start app: {e}")
+        raise
