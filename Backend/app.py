@@ -520,7 +520,7 @@ logging.basicConfig(
 )
 
 # Enable CORS for all routes (Render production and local dev)
-CORS(app, supports_credentials=True)
+CORS(app, supports_credentials=True, resources={r"/*": {"origins": ["https://classops-5.onrender.com"]}})
 
 @app.route('/')
 def serve():
