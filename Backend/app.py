@@ -36,6 +36,7 @@ from ai_checker import handle_upload, analyze_text, extract_text_from_file
 
 load_dotenv()
 print("🔥 Minimal app starting...")
+app = Flask(__name__, static_folder="dist", static_url_path="")
 MEET_API_BASE = "https://meet.googleapis.com/v2"
 MEETING_CODE_PATTERN = re.compile(r'([a-z]{3}-[a-z]{4}-[a-z]{3})', re.IGNORECASE)
 DEFAULT_PERIOD_TIMINGS = [
@@ -519,7 +520,7 @@ logging.basicConfig(
 
 # Enable CORS for all routes (Render production and local dev)
 CORS(app, supports_credentials=True)
-app = Flask(__name__, static_folder="dist", static_url_path="")
+
 @app.route("/")
 def home():
     return "Server working ✅"
