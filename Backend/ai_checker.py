@@ -4,8 +4,7 @@ import re
 import math
 from typing import List, Dict
 from collections import Counter
-import numpy as np
-from langchain_community.document_loaders import PyPDFLoader, UnstructuredFileLoader, Docx2txtLoader
+import statistics
 
 # ==========================================
 # 1. AI DETECTION ENGINE (Entropy & Burstiness)
@@ -32,7 +31,7 @@ class AIDetector:
         if len(self.sentences) < 2:
             return 0
         sentence_lengths = [len(s.split()) for s in self.sentences]
-        return np.std(sentence_lengths)
+        return statistics.pstdev(sentence_lengths)
 
     def calculate_score(self):
         """
@@ -132,14 +131,20 @@ def detect_ai_content(text: str) -> float:
 def extract_text_from_file(file_path: str, ext: str) -> str:
     try:
         if ext == '.pdf':
+            from langchain_community.document_loaders import PyPDFLoader
             loader = PyPDFLoader(file_path)
             return " ".join([p.page_content for p in loader.load()])
         elif ext in ['.docx', '.doc']:
+            from langchain_community.document_loaders import Docx2txtLoader
             loader = Docx2txtLoader(file_path)
             return loader.load()[0].page_content
         else:
+            from langchain_community.document_loaders import UnstructuredFileLoader
             loader = UnstructuredFileLoader(file_path)
             return loader.load()[0].page_content
+    except ImportError:
+        print("Warning: Document loading libraries are not installed.")
+        return ""
     except Exception:
         return ""
 

@@ -22,15 +22,9 @@ import difflib
 import json
 import re
 import requests
-from google import genai
-from google.genai import types
 from datetime import datetime, timezone
 from google.auth.transport.requests import Request as GoogleAuthRequest, AuthorizedSession
 from io import BytesIO
-from docx import Document
-from docx.shared import Pt
-from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
-from docx.enum.table import WD_TABLE_ALIGNMENT
 from textwrap import wrap
 from ai_checker import handle_upload, analyze_text, extract_text_from_file
 
@@ -400,6 +394,14 @@ def render_qp_text(qp, part_a_count, part_b_count, part_c_count):
 
 
 def build_question_paper_docx(header, qp, part_a_count, part_b_count, part_c_count):
+    try:
+        from docx import Document
+        from docx.shared import Pt
+        from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+        from docx.enum.table import WD_TABLE_ALIGNMENT
+    except ImportError:
+        raise Exception("python-docx is not installed. Question paper generation in DOCX format is disabled.")
+
     doc = Document()
     style = doc.styles['Normal']
     style.font.name = 'Times New Roman'
@@ -1385,12 +1387,20 @@ def generate_question_paper():
     prompt = build_qp_prompt(topic, course_name, difficulty, part_a_count, part_b_count, part_c_count)
 
     try:
+        from google import genai
+        from google.genai import types
         client = genai.Client(api_key=effective_key)
         response = client.models.generate_content(
             model=GEMINI_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=900, response_mime_type="application/json", response_schema=get_qp_schema(part_a_count, part_b_count, part_c_count))
         )
+    except ImportError:
+        return jsonify({"error": "google-genai is not installed. Question paper generation is disabled."}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+        
+    try:
         raw_text = ""
         if response is not None:
             raw_text = getattr(response, "text", "") or ""
