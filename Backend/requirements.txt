@@ -6,10 +6,7 @@ google-auth-httplib2
 google-auth-oauthlib
 requests
 python-dotenv
-langsmith
-langchain
-langchain-community
-unstructured
+
 pypdf
 python-docx
 docx2txt
@@ -17,9 +14,8 @@ flask-session
 scikit-learn
 transformers
 torch
-torchvision
+
 
 reportlab
 google-genai
-torchaudio
 gunicorn
