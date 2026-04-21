@@ -47,6 +47,17 @@ def decimal_to_native(obj):
             return float(obj)
     return obj
 
+import datetime
+def sanitize_for_dynamodb(obj):
+    """Recursively converts unsupported types (like datetime) to strings for DynamoDB."""
+    if isinstance(obj, list):
+        return [sanitize_for_dynamodb(i) for i in obj]
+    elif isinstance(obj, dict):
+        return {k: sanitize_for_dynamodb(v) for k, v in obj.items()}
+    elif isinstance(obj, (datetime.datetime, datetime.date)):
+        return obj.isoformat()
+    return obj
+
 # --- Core Helper Functions for Auth & Sync ---
 
 def get_teacher(email):
@@ -67,7 +78,7 @@ def get_teacher(email):
 def put_teacher(teacher_data):
     teacher_data['PK'] = f"TEACHER#{teacher_data['email']}"
     teacher_data['SK'] = 'METADATA'
-    table.put_item(Item=teacher_data)
+    table.put_item(Item=sanitize_for_dynamodb(teacher_data))
     return teacher_data
 
 def get_course(email, course_id):
@@ -83,14 +94,14 @@ def put_course(email, course_data):
     course_id = course_data.get('id')
     course_data['PK'] = f"TEACHER#{email}"
     course_data['SK'] = f"COURSE#{course_id}"
-    table.put_item(Item=course_data)
+    table.put_item(Item=sanitize_for_dynamodb(course_data))
     return course_data
 
 def sync_student(course_id, student_data):
     roll = student_data.get('roll_number')
     student_data['PK'] = f"COURSE#{course_id}"
     student_data['SK'] = f"STUDENT#{roll}"
-    table.put_item(Item=student_data)
+    table.put_item(Item=sanitize_for_dynamodb(student_data))
     return student_data
 
 def get_courses_by_teacher(email):
@@ -127,7 +138,7 @@ def put_assignment(course_id, assignment_data):
     assignment_id = assignment_data.get('id') or assignment_data.get('google_assignment_id')
     assignment_data['PK'] = f"COURSE#{course_id}"
     assignment_data['SK'] = f"ASSIGNMENT#{assignment_id}"
-    table.put_item(Item=assignment_data)
+    table.put_item(Item=sanitize_for_dynamodb(assignment_data))
     return assignment_data
 
 def get_assignment(course_id, assignment_id):
@@ -162,7 +173,7 @@ def put_attendance_record(course_id, record_data):
     roll = record_data.get('student_id') # mapping student_id to roll_number
     record_data['PK'] = f"COURSE#{course_id}"
     record_data['SK'] = f"ATTENDANCE#{date}#{roll}"
-    table.put_item(Item=record_data)
+    table.put_item(Item=sanitize_for_dynamodb(record_data))
     return record_data
 
 def get_material_targets_by_course(course_id):
@@ -179,7 +190,7 @@ def put_material_target(course_id, target_data):
     target_id = target_data.get('id')
     target_data['PK'] = f"COURSE#{course_id}"
     target_data['SK'] = f"TARGET#{target_id}"
-    table.put_item(Item=target_data)
+    table.put_item(Item=sanitize_for_dynamodb(target_data))
     return target_data
 
 def get_timetable_slots_by_course(course_id):
@@ -196,7 +207,7 @@ def put_timetable_slot(course_id, slot_data):
     slot_id = slot_data.get('id')
     slot_data['PK'] = f"COURSE#{course_id}"
     slot_data['SK'] = f"SLOT#{slot_id}"
-    table.put_item(Item=slot_data)
+    table.put_item(Item=sanitize_for_dynamodb(slot_data))
     return slot_data
 
 def delete_timetable_slot(course_id, slot_id):

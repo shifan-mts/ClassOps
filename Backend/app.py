@@ -1996,11 +1996,31 @@ def get_timetable():
     
     # Collect all slots for all courses
     all_slots = []
+    seen_teacher_slots = set()
     for c in courses:
         slots = get_timetable_slots_by_course(c['id'])
         for slot in slots:
-            slot['course'] = c # Attach course info
-            all_slots.append(slot)
+            # Deduplicate by course_id, day, period
+            signature = f"{c['id']}_{slot.get('day')}_{slot.get('period')}"
+            if signature not in seen_teacher_slots:
+                seen_teacher_slots.add(signature)
+                slot['course'] = c # Attach course info
+                all_slots.append(slot)
+            
+    target_date_str = request.args.get('date')
+    is_today = request.args.get('today') == 'true'
+    
+    target_day_name = None
+    if is_today:
+        target_day_name = datetime.now(timezone.utc).strftime("%A")
+    elif target_date_str:
+        try:
+            target_day_name = datetime.strptime(target_date_str, '%Y-%m-%d').strftime("%A")
+        except ValueError:
+            pass
+
+    if target_day_name:
+        all_slots = [s for s in all_slots if s.get('day') == target_day_name]
             
     for slot in all_slots:
         if 'period' in slot:
@@ -2298,19 +2318,25 @@ def student_dashboard():
         local_course_ids = [c.get('id') for c in local_courses]
         
         if local_course_ids:
+            seen_student_slots = set()
             for local_course in local_courses:
                 slots = get_timetable_slots_by_course(local_course.get('id'))
                 for slot in slots:
-                    timetable_data.append({
-                        "id": slot.get('id'),
-                        "day": slot.get('day'),
-                        "start_time": slot.get('start_time'), # Deprecated fields but keeping for backwards compatibility if needed
-                        "end_time": slot.get('end_time'),
-                        "subject": slot.get('subject'),
-                        "google_event_id": slot.get('google_event_id'),
-                        "meet_link": local_course.get('meet_link'),
-                        "meet_code": local_course.get('meet_code')
-                    })
+                    # Deduplicate by course_id, day, period (or start_time)
+                    signature = f"{local_course.get('id')}_{slot.get('day')}_{slot.get('period', slot.get('start_time'))}"
+                    if signature not in seen_student_slots:
+                        seen_student_slots.add(signature)
+                        timetable_data.append({
+                            "id": slot.get('id'),
+                            "day": slot.get('day'),
+                            "start_time": slot.get('start_time'), # Deprecated fields but keeping for backwards compatibility if needed
+                            "end_time": slot.get('end_time'),
+                            "period": slot.get('period'),
+                            "subject": slot.get('subject'),
+                            "google_event_id": slot.get('google_event_id'),
+                            "meet_link": local_course.get('meet_link'),
+                            "meet_code": local_course.get('meet_code')
+                        })
 
     return jsonify({
         "user": user_info,
@@ -2364,20 +2390,56 @@ def sync_student_calendar():
             next_date = today + dt.timedelta(days_ahead)
             date_str = next_date.isoformat()
             
+            def format_time(val):
+                if not val: return "00:00"
+                if isinstance(val, (int, float)): return f"{int(val):02d}:00"
+                s = str(val).strip()
+                if ":" in s:
+                    p = s.split(':')
+                    try: return f"{int(p[0]):02d}:{int(p[1][:2]):02d}"
+                    except: pass
+                try: return f"{int(s):02d}:00"
+                except: return "00:00"
+            
+            start_t = format_time(slot.get('start_time'))
+            end_t = format_time(slot.get('end_time'))
+
+            start_datetime = f"{date_str}T{start_t}:00"
+            end_datetime = f"{date_str}T{end_t}:00"
+            summary_text = f"{slot.get('subject')} Class"
+
+            # Check for duplicates on the exact same day
+            events_result = calendar_service.events().list(
+                calendarId='primary', 
+                timeMin=f"{date_str}T00:00:00+05:30", 
+                timeMax=f"{date_str}T23:59:59+05:30", 
+                singleEvents=True,
+                q=summary_text
+            ).execute()
+            
+            existing_events = events_result.get('items', [])
+            is_duplicate = any(
+                e.get('summary') == summary_text for e in existing_events
+            )
+            
+            if is_duplicate:
+                app.logger.info(f"Skipping duplicate event: {summary_text} on {date_str}")
+                continue
+
             meet_link = slot.get('meet_link')
             desc = 'ClassOps Auto-synced Student Class'
             if meet_link:
                 desc += f'\n\nJoin Class via Meet: {meet_link}'
                 
             event = {
-                'summary': f"{slot.get('subject')} Class",
+                'summary': summary_text,
                 'description': desc,
                 'start': {
-                    'dateTime': f"{date_str}T{slot.get('start_time')}:00", 
+                    'dateTime': start_datetime, 
                     'timeZone': 'Asia/Kolkata',
                 },
                 'end': {
-                    'dateTime': f"{date_str}T{slot.get('end_time')}:00",
+                    'dateTime': end_datetime,
                     'timeZone': 'Asia/Kolkata',
                 },
                 'recurrence': ['RRULE:FREQ=WEEKLY'],
