@@ -2003,6 +2003,22 @@ def get_timetable():
             all_slots.append(slot)
             
     for slot in all_slots:
+        if 'period' in slot:
+            try:
+                slot['period'] = int(slot['period'])
+            except (TypeError, ValueError):
+                slot['period'] = 0
+                
+        if 'year' in slot:
+            try:
+                slot['year'] = int(slot['year'])
+            except (TypeError, ValueError):
+                slot['year'] = None
+
+    # Safely sort the slots by day and period just in case
+    all_slots.sort(key=lambda s: (s.get('day', ''), s.get('period', 0)))
+
+    for slot in all_slots:
         if slot['course_id'] not in result:
             result[slot['course_id']] = {day: {} for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]}
         
