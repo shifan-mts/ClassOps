@@ -618,9 +618,9 @@ def getMeetingLink(courseId, credentials_dict=None):
         )
 
     return {
-        "courseId": course.id,
-        "courseName": course.name,
-        "googleCourseId": course.google_course_id,
+        "courseId": course.get('id') or course.get('google_course_id'),
+        "courseName": course.get('name'),
+        "googleCourseId": course.get('google_course_id'),
         "meetLink": meet_link,
         "meetingCode": meeting_code,
         "source": source,
@@ -1820,7 +1820,7 @@ def sync_students_for_course(course_id):
     course = get_owned_course_or_404(course_id)
     if not course:
         return jsonify({"error": "Forbidden"}), 403
-    if not course.google_course_id:
+    if not course.get('google_course_id'):
         return jsonify({"error": "Course not linked to Google Classroom"}), 400
 
     try:
@@ -1828,7 +1828,7 @@ def sync_students_for_course(course_id):
         next_page_token = None
         while True:
             results = service.courses().students().list(
-                courseId=course.google_course_id,
+                courseId=course.get('google_course_id'),
                 pageToken=next_page_token
             ).execute()
             students_data.extend(results.get('students', []))
@@ -2021,7 +2021,8 @@ def get_timetable():
         "availability": availability,
         "period_timings": normalize_period_timings(period_timings)
     })
-@app.route('/api/timetable/slot', methods=['POST'])
+
+@app.route('/api/timetable/slot', methods=['POST'])
 def upsert_timetable_slot():
     teacher = get_authenticated_teacher()
     if not teacher:
