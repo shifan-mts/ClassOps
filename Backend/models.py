@@ -2,22 +2,37 @@ import os
 import boto3
 from decimal import Decimal
 import json
+from botocore.exceptions import ClientError
 
 # Setup boto3 resource
 # Using os.getenv for credentials and region (User should add them to .env/Render)
 AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 AWS_REGION = os.getenv('AWS_REGION', 'eu-north-1')
-DYNAMODB_TABLE_NAME = os.getenv('DYNAMODB_TABLE_NAME', 'ClassOps')
+DYNAMODB_TABLE_NAME = os.getenv('DYNAMODB_TABLE')
+
+if not DYNAMODB_TABLE_NAME:
+    raise ValueError("CRITICAL ERROR: DYNAMODB_TABLE environment variable is not set. Please set it in your Render environment.")
 
 dynamodb = boto3.resource(
     'dynamodb',
-    region_name=AWS_REGION,
+    region_name='eu-north-1',
     aws_access_key_id=AWS_ACCESS_KEY_ID,
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY
 )
 
 table = dynamodb.Table(DYNAMODB_TABLE_NAME)
+
+# Verify table exists on initialization
+try:
+    table.load()
+    print(f"Successfully connected to DynamoDB table: {DYNAMODB_TABLE_NAME} in region eu-north-1")
+except ClientError as e:
+    if e.response['Error']['Code'] == 'ResourceNotFoundException':
+        print(f"CRITICAL ERROR: DynamoDB table '{DYNAMODB_TABLE_NAME}' not found in region 'eu-north-1'.")
+        print("Please check your AWS Console to ensure the table exists and names match exactly (case-sensitive).")
+    else:
+        print(f"Error connecting to DynamoDB: {e}")
 
 def decimal_to_native(obj):
     """Recursively converts DynamoDB Decimals to native Python ints/floats for JSON serialization."""
@@ -35,13 +50,19 @@ def decimal_to_native(obj):
 # --- Core Helper Functions for Auth & Sync ---
 
 def get_teacher(email):
-    response = table.get_item(
-        Key={
-            'PK': f"TEACHER#{email}",
-            'SK': 'METADATA'
-        }
-    )
-    return decimal_to_native(response.get('Item'))
+    try:
+        response = table.get_item(
+            Key={
+                'PK': f"TEACHER#{email}",
+                'SK': 'METADATA'
+            }
+        )
+        return decimal_to_native(response.get('Item'))
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ResourceNotFoundException':
+            print(f"CRITICAL ERROR in get_teacher: DynamoDB table '{DYNAMODB_TABLE_NAME}' not found.")
+            print("Please verify the AWS_REGION and DYNAMODB_TABLE_NAME environment variables.")
+        raise
 
 def put_teacher(teacher_data):
     teacher_data['PK'] = f"TEACHER#{teacher_data['email']}"
