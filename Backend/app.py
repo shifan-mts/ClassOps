@@ -1992,7 +1992,7 @@ def get_timetable():
     for c in courses:
         if max(int(c.get('hours_per_week', 0) or 0), 0) <= 0:
             continue
-        result[c['id']] = {day: {} for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]}
+        result[str(c['id'])] = {day: {} for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]}
     
     # Collect all slots for all courses
     all_slots = []
@@ -2016,18 +2016,25 @@ def get_timetable():
                 slot['year'] = None
 
     # Safely sort the slots by day and period just in case
-    all_slots.sort(key=lambda s: (s.get('day', ''), s.get('period', 0)))
+    all_slots.sort(key=lambda s: (str(s.get('day', '')), s.get('period', 0)))
 
     for slot in all_slots:
-        if slot['course_id'] not in result:
-            result[slot['course_id']] = {day: {} for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]}
+        cid_str = str(slot['course_id'])
+        day_str = str(slot.get('day', 'Monday'))
+        period_str = str(slot['period'])
+        
+        if cid_str not in result:
+            result[cid_str] = {day: {} for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]}
+            
+        if day_str not in result[cid_str]:
+            result[cid_str][day_str] = {}
         
         c = slot['course']
-        result[slot['course_id']][slot['day']][slot['period']] = {
-            "slot_id": slot['id'],
-            "course_id": slot['course_id'],
-            "sub": slot['subject'],
-            "className": c.get('name'),
+        result[cid_str][day_str][period_str] = {
+            "slot_id": str(slot.get('id', '')),
+            "course_id": cid_str,
+            "sub": str(slot.get('subject', '')),
+            "className": str(c.get('name', '')),
             "meetLink": c.get('meet_link'),
             "meetingCode": c.get('meet_code')
         }
