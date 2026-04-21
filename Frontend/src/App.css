@@ -78,6 +78,10 @@
 
 .card {
   background: #ffffff;
+  min-height: fit-content;
+  height: auto;
+  display: flex;
+  flex-direction: column;
   border-radius: 22px;
   padding: 24px;
   box-shadow: 0 20px 45px rgba(15, 25, 35, 0.08);
