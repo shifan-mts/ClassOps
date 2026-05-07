@@ -801,6 +801,24 @@ export default function App() {
   if (!user) {
     return <LandingPage onSignIn={handleSignIn} isSyncing={isSyncing} />;
   }
+
+  // --- DEBUG SNIPPET FOR RENDER ---
+  const finalTabs = [
+    ...(user?.role === 'student' ? [] : [
+      { id: "overview", label: "Overview & Targets" },
+      { id: "attendance", label: "Attendance" },
+      { id: "meet", label: "Meet" },
+      { id: "ai-tools", label: "AI Tools" },
+      { id: "feedback", label: "Feedback & Grading" },
+      { id: "timetable", label: "Timetable" }
+    ]),
+    ...(user?.role === 'student' ? [{ id: "student-dashboard", label: "Student Dashboard" }] : [])
+  ];
+  console.log("=== RENDER DEBUG ===");
+  console.log("User Role:", user?.role);
+  console.log("Final Tabs Array:", finalTabs);
+  // --------------------------------
+
   return (
     <div className="app">
       <header className="header">
