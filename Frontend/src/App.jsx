@@ -3,7 +3,7 @@ import './App.css';
 import Timetablegenerator from './components/ui/page/Timetablegenerator';
 import MeetAttendancePanel from './components/MeetAttendancePanel';
 import StudentDashboard from './components/StudentDashboard';
-
+import FeedbackPanel from './components/FeedbackPanel';
 function AttendanceReport({ report, loading, onRefresh }) {
   return (
     <div className="card">
@@ -832,6 +832,7 @@ export default function App() {
               { id: "attendance", label: "Attendance" },
               { id: "meet", label: "Meet" },
               { id: "ai-tools", label: "AI Tools" },
+              { id: "feedback", label: "Feedback & Grading" },
               { id: "timetable", label: "Timetable" }
             ]),
             ...(user?.role === 'student' ? [{ id: "student-dashboard", label: "Student Dashboard" }] : [])
@@ -845,6 +846,16 @@ export default function App() {
             </button>
           ))}
         </div>
+
+        {activeTab === "feedback" && (
+          <FeedbackPanel
+            apiBase={API_BASE}
+            courses={courses}
+            courseId={selectedCourseId}
+            onCourseChange={setSelectedCourseId}
+            isSyncing={isSyncing}
+          />
+        )}
 
         {activeTab === "overview" && (
           <section className="grid">

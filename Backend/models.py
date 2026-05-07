@@ -231,3 +231,18 @@ def get_courses_by_google_ids(google_course_ids):
     all_courses = decimal_to_native(response.get('Items', []))
     matched_courses = [c for c in all_courses if c.get('google_course_id') in google_course_ids]
     return matched_courses
+
+def get_feedback(course_id, assignment_id, student_id):
+    response = table.get_item(
+        Key={
+            'PK': f"COURSE#{course_id}",
+            'SK': f"FEEDBACK#{assignment_id}#{student_id}"
+        }
+    )
+    return decimal_to_native(response.get('Item'))
+
+def put_feedback(course_id, assignment_id, student_id, feedback_data):
+    feedback_data['PK'] = f"COURSE#{course_id}"
+    feedback_data['SK'] = f"FEEDBACK#{assignment_id}#{student_id}"
+    table.put_item(Item=sanitize_for_dynamodb(feedback_data))
+    return feedback_data
