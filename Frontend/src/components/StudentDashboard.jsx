@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-const StudentDashboard = ({ API_BASE }) => {
+const StudentDashboard = ({ API_BASE, onReadFeedback }) => {
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -218,7 +218,16 @@ const StudentDashboard = ({ API_BASE }) => {
                       <div style={{ fontWeight: 600, color: '#065f46', marginBottom: '4px', textDecoration: 'line-through' }}>{a.title}</div>
                       {a.score && <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#047857' }}>{a.score}</div>}
                     </div>
-                    <div style={{ fontSize: '0.8rem', color: '#059669' }}>{a.course_name}</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ fontSize: '0.8rem', color: '#059669' }}>{a.course_name}</div>
+                      <button 
+                        className="ghost" 
+                        onClick={() => onReadFeedback && onReadFeedback(a.course_id, a.id)}
+                        style={{ padding: '4px 8px', fontSize: '0.75rem', background: '#d1fae5', color: '#065f46' }}
+                      >
+                        Read Feedback
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

@@ -109,6 +109,8 @@ function LandingPage({ onSignIn, isSyncing }) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("overview");
+  const [initialFeedbackAssignment, setInitialFeedbackAssignment] = useState("");
+  const [initialFeedbackStudent, setInitialFeedbackStudent] = useState("");
   const [courses, setCourses] = useState([]);
   const [selectedCourseId, setSelectedCourseId] = useState("");
   const [students, setStudents] = useState([]);
@@ -854,6 +856,9 @@ export default function App() {
             courseId={selectedCourseId}
             onCourseChange={setSelectedCourseId}
             isSyncing={isSyncing}
+            initialAssignmentId={initialFeedbackAssignment}
+            initialUserId={initialFeedbackStudent}
+            readOnly={user?.role === 'student'}
           />
         )}
 
@@ -1000,9 +1005,14 @@ export default function App() {
         {activeTab === "attendance" && (
           <section className="stack">
             <div className="card">
-              <div className="card-header">
-                <h3>Subject-wise Attendance</h3>
-                <p>Log presence for the selected subject and date.</p>
+              <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <h3>Subject-wise Attendance</h3>
+                  <p>Log presence for the selected subject and date.</p>
+                </div>
+                <button className="ghost" onClick={() => setActiveTab('feedback')} style={{ padding: '6px 12px', fontSize: '0.85rem' }}>
+                  View Feedback
+                </button>
               </div>
               <div className="card-body">
                 <div className="input-row">
@@ -1032,6 +1042,7 @@ export default function App() {
                       <tr>
                         <th>Roll Number</th>
                         <th>Name</th>
+                        <th>Actions</th>
                         <th style={{ textAlign: 'right' }}>Status</th>
                       </tr>
                     </thead>
@@ -1040,6 +1051,18 @@ export default function App() {
                         <tr key={s.id}>
                           <td>{s.roll_number}</td>
                           <td>{s.name}</td>
+                          <td>
+                            <button 
+                              className="ghost" 
+                              onClick={() => {
+                                setInitialFeedbackStudent(s.google_student_id || s.id);
+                                setActiveTab("feedback");
+                              }}
+                              style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                            >
+                              Grade/Feedback
+                            </button>
+                          </td>
                           <td style={{ textAlign: 'right' }}>
                             <select
                               value={attendanceRecords[s.id] || "Present"}
@@ -1297,7 +1320,15 @@ export default function App() {
         )}
 
         {activeTab === "student-dashboard" && (
-          <StudentDashboard API_BASE={API_BASE} />
+          <StudentDashboard 
+            API_BASE={API_BASE} 
+            onReadFeedback={(courseId, assignmentId) => {
+              if (courseId) setSelectedCourseId(courseId);
+              setInitialFeedbackAssignment(assignmentId);
+              setInitialFeedbackStudent(user?.google_student_id || user?.id);
+              setActiveTab("feedback");
+            }}
+          />
         )}
       </div>
     </div>

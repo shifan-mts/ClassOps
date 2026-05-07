@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-export default function FeedbackPanel({ apiBase, courses, courseId, onCourseChange, isSyncing }) {
+export default function FeedbackPanel({ apiBase, courses, courseId, onCourseChange, isSyncing, initialAssignmentId, initialUserId, readOnly }) {
   const [assignments, setAssignments] = useState([]);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState("");
   const [submissions, setSubmissions] = useState([]);
@@ -13,6 +13,12 @@ export default function FeedbackPanel({ apiBase, courses, courseId, onCourseChan
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+
+  useEffect(() => {
+    if (initialAssignmentId) {
+      setSelectedAssignmentId(initialAssignmentId);
+    }
+  }, [initialAssignmentId]);
 
   const selectedSubmission = submissions.find(s => s.id === selectedSubmissionId);
 
@@ -47,6 +53,15 @@ export default function FeedbackPanel({ apiBase, courses, courseId, onCourseChan
     setError("");
     setSuccessMsg("");
   }, [selectedSubmissionId, submissions]);
+
+  useEffect(() => {
+    if (submissions.length > 0 && initialUserId) {
+      const sub = submissions.find(s => s.userId === initialUserId);
+      if (sub) {
+        setSelectedSubmissionId(sub.id);
+      }
+    }
+  }, [submissions, initialUserId]);
 
   const fetchAssignments = async (cid) => {
     try {
@@ -139,6 +154,7 @@ export default function FeedbackPanel({ apiBase, courses, courseId, onCourseChan
             <select
               value={courseId}
               onChange={(e) => onCourseChange(e.target.value)}
+              disabled={readOnly && !!courseId}
             >
               <option value="">Select Subject</option>
               {courses.map(c => (
@@ -148,7 +164,7 @@ export default function FeedbackPanel({ apiBase, courses, courseId, onCourseChan
             <select
               value={selectedAssignmentId}
               onChange={(e) => setSelectedAssignmentId(e.target.value)}
-              disabled={!courseId}
+              disabled={!courseId || (readOnly && !!initialAssignmentId)}
             >
               <option value="">Select Assignment</option>
               {assignments.map(a => (
@@ -161,7 +177,7 @@ export default function FeedbackPanel({ apiBase, courses, courseId, onCourseChan
             <select
               value={selectedSubmissionId}
               onChange={(e) => setSelectedSubmissionId(e.target.value)}
-              disabled={!selectedAssignmentId || submissions.length === 0}
+              disabled={!selectedAssignmentId || submissions.length === 0 || (readOnly && !!initialUserId)}
             >
               <option value="">Select Student Submission</option>
               {submissions.map(s => (
@@ -190,9 +206,10 @@ export default function FeedbackPanel({ apiBase, courses, courseId, onCourseChan
 
               <div className="input-row" style={{ alignItems: 'flex-start' }}>
                 <textarea 
-                  placeholder="Write your feedback here..."
+                  placeholder={readOnly ? "No internal feedback." : "Write your feedback here..."}
                   value={internalComment}
                   onChange={(e) => setInternalComment(e.target.value)}
+                  disabled={readOnly}
                   style={{ flex: 1, padding: '12px', borderRadius: '12px', border: '1px solid #cdd8e3', minHeight: '120px', fontFamily: 'inherit' }}
                 />
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', width: '200px' }}>
@@ -201,19 +218,24 @@ export default function FeedbackPanel({ apiBase, courses, courseId, onCourseChan
                     placeholder="Grade (e.g. 95)" 
                     value={grade}
                     onChange={(e) => setGrade(e.target.value)}
+                    disabled={readOnly}
                   />
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem' }}>
-                    <input 
-                      type="checkbox" 
-                      checked={syncToGoogle}
-                      onChange={(e) => setSyncToGoogle(e.target.checked)}
-                      style={{ width: 'auto', margin: 0 }}
-                    />
-                    Sync to Google Classroom
-                  </label>
-                  <button className="primary" onClick={handleSaveFeedback} disabled={isSaving}>
-                    {isSaving ? "Saving..." : (syncToGoogle ? "Sync & Save" : "Save Draft")}
-                  </button>
+                  {!readOnly && (
+                    <>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem' }}>
+                        <input 
+                          type="checkbox" 
+                          checked={syncToGoogle}
+                          onChange={(e) => setSyncToGoogle(e.target.checked)}
+                          style={{ width: 'auto', margin: 0 }}
+                        />
+                        Sync to Google Classroom
+                      </label>
+                      <button className="primary" onClick={handleSaveFeedback} disabled={isSaving}>
+                        {isSaving ? "Saving..." : (syncToGoogle ? "Sync & Save" : "Save Draft")}
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
               
