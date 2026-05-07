@@ -152,7 +152,8 @@ export default function App() {
   const [timetableData, setTimetableData] = useState({});
   const [periodTimings, setPeriodTimings] = useState([]);
 
-  const API_BASE = "https://classops-5.onrender.com";
+  // Dynamically set API_BASE based on the environment (localhost vs production)
+  const API_BASE = import.meta.env.DEV ? "http://localhost:5000" : window.location.origin;
 
   useEffect(() => {
     fetchUser();
@@ -673,7 +674,7 @@ export default function App() {
         status
       }));
 
-      await fetch("https://classops-5.onrender.com/api/attendance", {
+      await fetch(`${API_BASE}/api/attendance`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

@@ -12,7 +12,7 @@ const DEFAULT_PERIODS = [
   { label: "2-3 PM", startHour: 14, endHour: 15 },
   { label: "3-4 PM", startHour: 15, endHour: 16 }
 ];
-const API_BASE = "https://classops-5.onrender.com";
+  const API_BASE = import.meta.env.DEV ? "http://localhost:5000" : window.location.origin;
 
 const PALETTES = [
   { bg: "#dbeafe", border: "#3b82f6", text: "#1e3a8a" },
