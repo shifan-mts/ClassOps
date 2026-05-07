@@ -579,7 +579,11 @@ SCOPES = [
     'https://www.googleapis.com/auth/userinfo.profile',
     'https://www.googleapis.com/auth/drive.file'
 ]
-GOOGLE_REDIRECT_URI = "https://classops-5.onrender.com/api/auth/google/callback"
+def get_redirect_uri():
+    base = os.getenv('BASE_URL', request.host_url.rstrip('/'))
+    if "onrender.com" in base:
+        base = base.replace('http://', 'https://')
+    return f"{base}/api/auth/google/callback"
 
 
 def get_classroom_service(credentials_dict=None):
@@ -834,7 +838,7 @@ def google_auth():
     flow = Flow.from_client_secrets_file(
         CLIENT_SECRETS_FILE, scopes=SCOPES
     )
-    flow.redirect_uri = GOOGLE_REDIRECT_URI
+    flow.redirect_uri = get_redirect_uri()
     authorization_url, state = flow.authorization_url(
         access_type='offline',
         include_granted_scopes='false', # Set to false to remove old permissions
@@ -850,7 +854,7 @@ def google_auth_url():
     flow = Flow.from_client_secrets_file(
         CLIENT_SECRETS_FILE, scopes=SCOPES
     )
-    flow.redirect_uri = GOOGLE_REDIRECT_URI
+    flow.redirect_uri = get_redirect_uri()
     authorization_url, state = flow.authorization_url(
         access_type='offline',
         include_granted_scopes='false', # Set to false to remove old permissions
@@ -880,11 +884,15 @@ def google_auth_callback():
         flow = Flow.from_client_secrets_file(
             CLIENT_SECRETS_FILE, scopes=SCOPES, state=url_state or state
         )
-        flow.redirect_uri = GOOGLE_REDIRECT_URI
+        flow.redirect_uri = get_redirect_uri()
         
         # Determine the current base URL for redirecting back to the frontend
-        # This checks if the app is running on Render; otherwise defaults to localhost
-        frontend_url = "https://classops-5.onrender.com" if "onrender.com" in request.host else "http://localhost:5173"
+        base = os.getenv('BASE_URL', request.host_url.rstrip('/'))
+        if "onrender.com" in base:
+            base = base.replace('http://', 'https://')
+            frontend_url = base
+        else:
+            frontend_url = "http://localhost:5173"
         
         authorization_response = request.url
         
