@@ -802,22 +802,26 @@ export default function App() {
     return <LandingPage onSignIn={handleSignIn} isSyncing={isSyncing} />;
   }
 
-  // --- DEBUG SNIPPET FOR RENDER ---
-  const finalTabs = [
-    ...(user?.role === 'student' ? [] : [
-      { id: "overview", label: "Overview & Targets" },
-      { id: "attendance", label: "Attendance" },
-      { id: "meet", label: "Meet" },
-      { id: "ai-tools", label: "AI Tools" },
-      { id: "feedback", label: "Feedback & Grading" },
-      { id: "timetable", label: "Timetable" }
-    ]),
-    ...(user?.role === 'student' ? [{ id: "student-dashboard", label: "Student Dashboard" }] : [])
-  ];
-  console.log("=== RENDER DEBUG ===");
-  console.log("User Role:", user?.role);
-  console.log("Final Tabs Array:", finalTabs);
-  // --------------------------------
+  // Define tabs robustly: default to Teacher tabs unless explicitly a 'student'
+  const isStudent = user?.role === 'student';
+  const activeTabs = isStudent 
+    ? [{ id: "student-dashboard", label: "Student Dashboard" }]
+    : [
+        { id: "overview", label: "Overview & Targets" },
+        { id: "attendance", label: "Attendance" },
+        { id: "meet", label: "Meet" },
+        { id: "ai-tools", label: "AI Tools" },
+        { id: "feedback", label: "Feedback & Grading" },
+        { id: "timetable", label: "Timetable" }
+      ];
+
+  // Debug hook to track user state in production
+  useEffect(() => {
+    console.log("=== RENDER DEBUG ===");
+    console.log("Current User Object:", user);
+    console.log("Evaluated Role:", user?.role);
+    console.log("Final Tabs Array:", activeTabs);
+  }, [user]);
 
   return (
     <div className="app">
@@ -846,17 +850,7 @@ export default function App() {
 
       <div className="tabs">
         <div className="tab-list">
-          {[
-            ...(user?.role === 'student' ? [] : [
-              { id: "overview", label: "Overview & Targets" },
-              { id: "attendance", label: "Attendance" },
-              { id: "meet", label: "Meet" },
-              { id: "ai-tools", label: "AI Tools" },
-              { id: "feedback", label: "Feedback & Grading" },
-              { id: "timetable", label: "Timetable" }
-            ]),
-            ...(user?.role === 'student' ? [{ id: "student-dashboard", label: "Student Dashboard" }] : [])
-          ].map((tab) => (
+          {activeTabs.map((tab) => (
             <button
               key={tab.id}
               className={`tab-button ${activeTab === tab.id ? "active" : ""}`}
