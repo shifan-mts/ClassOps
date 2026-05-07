@@ -171,6 +171,7 @@
   gap: 10px;
   flex-wrap: wrap;
   width: 100%;
+  align-items: center;
 }
 
 input, select {
@@ -180,8 +181,15 @@ input, select {
   font-size: 1rem;
   width: 100%;
 }
+
 .input-row select,
 .input-row input {
+  flex: 1;
+  min-width: 150px;
+}
+
+.target-form input,
+.target-form select {
   flex: 1;
   min-width: 0;
 }
