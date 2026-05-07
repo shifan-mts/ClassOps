@@ -3,7 +3,6 @@ import './App.css';
 import Timetablegenerator from './components/ui/page/Timetablegenerator';
 import MeetAttendancePanel from './components/MeetAttendancePanel';
 import StudentDashboard from './components/StudentDashboard';
-import FeedbackPanel from './components/FeedbackPanel';
 import EvaluationPanel from './components/EvaluationPanel';
 
 function AttendanceReport({ report, loading, onRefresh }) {
@@ -111,8 +110,6 @@ function LandingPage({ onSignIn, isSyncing }) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("overview");
-  const [initialFeedbackAssignment, setInitialFeedbackAssignment] = useState("");
-  const [initialFeedbackStudent, setInitialFeedbackStudent] = useState("");
   const [courses, setCourses] = useState([]);
   const [selectedCourseId, setSelectedCourseId] = useState("");
   const [students, setStudents] = useState([]);
@@ -813,7 +810,6 @@ export default function App() {
   if (user.role !== 'student') {
     activeTabs = [
       ...activeTabs,
-      { id: "feedback", label: "Grading" },
       { id: "evaluations", label: "Course Evaluations" },
       { id: "timetable", label: "Timetable" }
     ];
@@ -857,19 +853,6 @@ export default function App() {
           ))}
         </div>
 
-        {activeTab === "feedback" && (
-          <FeedbackPanel
-            apiBase={API_BASE}
-            courses={courses}
-            courseId={selectedCourseId}
-            onCourseChange={setSelectedCourseId}
-            isSyncing={isSyncing}
-            initialAssignmentId={initialFeedbackAssignment}
-            initialUserId={initialFeedbackStudent}
-            readOnly={user?.role === 'student'}
-          />
-        )}
-        
         {activeTab === 'evaluations' && (
           <EvaluationPanel 
             API_BASE={API_BASE} 

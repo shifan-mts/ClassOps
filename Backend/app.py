@@ -2570,7 +2570,7 @@ def sync_student_calendar():
 
 @app.route('/api/student/evaluation', methods=['POST'])
 def submit_evaluation():
-    if 'user' not in session or session['user'].get('role') != 'student':
+    if 'user' not in session:
         return jsonify({"error": "Unauthorized"}), 403
         
     data = request.json

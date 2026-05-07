@@ -22,9 +22,9 @@ const EvaluationPanel = ({ API_BASE, courseId }) => {
   useEffect(() => {
     if (!courseId) return;
 
+    let isMounted = true;
+
     const fetchEvaluations = async () => {
-      setLoading(true);
-      setError('');
       try {
         const response = await fetch(`${API_BASE}/api/courses/${courseId}/evaluations`, {
           credentials: 'include'
@@ -32,19 +32,29 @@ const EvaluationPanel = ({ API_BASE, courseId }) => {
         const data = await response.json();
         
         if (response.ok) {
-          setEvaluations(data.evaluations || []);
-          setAverages(data.averages || {});
+          if (isMounted) {
+            setEvaluations(data.evaluations || []);
+            setAverages(data.averages || {});
+            setError('');
+          }
         } else {
-          setError(data.error || 'Failed to fetch evaluations.');
+          if (isMounted) setError(data.error || 'Failed to fetch evaluations.');
         }
       } catch (err) {
-        setError('Error fetching evaluations.');
+        if (isMounted) setError('Error fetching evaluations.');
       } finally {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }
     };
 
+    setLoading(true);
     fetchEvaluations();
+    const interval = setInterval(fetchEvaluations, 5000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, [courseId, API_BASE]);
 
   const handleDownload = () => {
