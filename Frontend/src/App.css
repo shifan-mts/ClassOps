@@ -1,3 +1,9 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 .app {
   min-height: 100vh;
   padding: 40px clamp(20px, 4vw, 64px);
@@ -86,6 +92,8 @@
   padding: 24px;
   box-shadow: 0 20px 45px rgba(15, 25, 35, 0.08);
   border: 1px solid #edf2f7;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .card-header h3 {
@@ -101,6 +109,8 @@
 .card-body {
   display: grid;
   gap: 16px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .list {
@@ -170,28 +180,34 @@
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
-  width: 100%;
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
 }
 
-input, select {
+input,
+select {
   padding: 12px 14px;
   border-radius: 12px;
   border: 1px solid #cdd8e3;
   font-size: 1rem;
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .input-row select,
-.input-row input {
+.input-row input,
+.target-form select,
+.target-form input {
+  width: auto;
   flex: 1;
-  min-width: 150px;
+  min-width: 120px;
 }
 
-.target-form input,
-.target-form select {
-  flex: 1;
-  min-width: 0;
+.input-row button,
+.target-form button {
+  flex-shrink: 0;
 }
 
 .primary,
@@ -242,17 +258,20 @@ input, select {
   color: #516173;
   background: #f9fbfd;
   text-align: center;
-  width: 100%;
 }
 
 /* Table styles for Attendance/Report */
-.attendance-table, .report-table {
+.attendance-table,
+.report-table {
   width: 100%;
   border-collapse: collapse;
   margin-top: 1rem;
 }
 
-.attendance-table th, .attendance-table td, .report-table th, .report-table td {
+.attendance-table th,
+.attendance-table td,
+.report-table th,
+.report-table td {
   padding: 12px;
   text-align: left;
   border-bottom: 1px solid #e4ecf4;
@@ -330,6 +349,7 @@ input, select {
   .tab-list {
     border-radius: 18px;
   }
+
   .header {
     align-items: flex-start;
   }
@@ -487,4 +507,3 @@ input[type="file"] {
     align-items: flex-start;
   }
 }
-
