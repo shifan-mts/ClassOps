@@ -1914,16 +1914,22 @@ def get_attendance_report(course_id):
     report = []
     
     for s in students:
+        student_id = s.get('id')
         roll_number = s.get('roll_number')
-        # filter all_attendance for this student
-        student_attendance = [a for a in all_attendance if a.get('student_id') == roll_number]
+        
+        # Match by student.id (current frontend behavior) or roll_number (legacy behavior)
+        student_attendance = [
+            a for a in all_attendance 
+            if str(a.get('student_id')) == str(student_id) or (roll_number and str(a.get('student_id')) == str(roll_number))
+        ]
+        
         total_classes = len(student_attendance)
         present_count = len([a for a in student_attendance if a.get('status') == 'Present'])
         
         percentage = (present_count / total_classes * 100) if total_classes > 0 else 0
         
         report.append({
-            "student_id": s.get('id', roll_number),
+            "student_id": student_id,
             "name": s.get('name'),
             "roll_number": roll_number,
             "total": total_classes,
