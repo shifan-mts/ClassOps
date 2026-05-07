@@ -816,13 +816,6 @@ export default function App() {
         { id: "timetable", label: "Timetable" }
       ];
 
-  // Debug hook to track user state in production
-  useEffect(() => {
-    console.log("=== RENDER DEBUG ===");
-    console.log("Current User Object:", user);
-    console.log("Evaluated Role:", user?.role);
-    console.log("Final Tabs Array:", activeTabs);
-  }, [user]);
 
   return (
     <div className="app">
