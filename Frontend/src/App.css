@@ -176,6 +176,7 @@ input, select {
   border-radius: 12px;
   border: 1px solid #cdd8e3;
   font-size: 1rem;
+  width : 200px;
 }
 
 .primary,
@@ -226,6 +227,7 @@ input, select {
   color: #516173;
   background: #f9fbfd;
   text-align: center;
+  width: 200px;
 }
 
 /* Table styles for Attendance/Report */
