@@ -683,7 +683,6 @@ def getAttendanceReport(meetingCode, courseId=None, credentials_dict=None):
     meeting_ended = bool(conference_record.get('endTime'))
     live_present_count = 0
     excluded_emails = {
-        normalize_email('johnjebarathinamn@jerusalemengg.ac.in'),
         normalize_email(session.get('user', {}).get('email'))
     }
     excluded_emails = {email for email in excluded_emails if email}
@@ -699,8 +698,18 @@ def getAttendanceReport(meetingCode, courseId=None, credentials_dict=None):
         leave_time = participant.get('latestEndTime')
         user_id = extract_meet_user_id(participant)
         email = resolve_classroom_email(classroom_service, user_id, email_cache)
+        
+        # Skip the person who logged in (usually the main teacher)
         if email in excluded_emails:
             continue
+            
+        # Dynamically skip ANY other teachers who might have joined
+        if email:
+            from email_parser import parse_jerusalem_email
+            parsed = parse_jerusalem_email(email)
+            if parsed['role'] == 'teacher':
+                continue
+                
         matched_student = student_by_email.get(email) if email else None
         participant_sessions = list_meet_collection(
             f"{participant['name']}/participantSessions",
