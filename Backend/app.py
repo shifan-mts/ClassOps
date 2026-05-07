@@ -569,6 +569,7 @@ SCOPES = [
     'https://www.googleapis.com/auth/classroom.profile.emails',
     'https://www.googleapis.com/auth/classroom.student-submissions.students.readonly',
     'https://www.googleapis.com/auth/classroom.student-submissions.me.readonly',
+    'https://www.googleapis.com/auth/classroom.coursework.students',
     'https://www.googleapis.com/auth/classroom.coursework.students.readonly',
     'https://www.googleapis.com/auth/classroom.coursework.me.readonly',
     'https://www.googleapis.com/auth/classroom.announcements.readonly',
@@ -1256,7 +1257,7 @@ def get_submissions(course_id, assignment_id):
         
         # Join with students from DB
         students = get_students_by_course(course_id)
-        student_map = {s.get('google_student_id'): s for s in students if s.get('google_student_id')}
+        student_map = {s.get('id'): s for s in students if s.get('id')}
         
         enhanced_submissions = []
         for sub in submissions:
@@ -2566,6 +2567,111 @@ def sync_student_calendar():
             app.logger.error(f"Failed to sync slot {slot.get('id')}: {e}")
             
     return jsonify({"message": f"Successfully synced {synced_count} classes to your Google Calendar."})
+
+@app.route('/api/student/evaluation', methods=['POST'])
+def submit_evaluation():
+    if 'user' not in session or session['user'].get('role') != 'student':
+        return jsonify({"error": "Unauthorized"}), 403
+        
+    data = request.json
+    course_id = data.get('course_id')
+    ratings = data.get('ratings')
+    
+    if not course_id or not ratings:
+        return jsonify({"error": "Missing course_id or ratings"}), 400
+        
+    student_id = session['user'].get('id')
+    if not student_id:
+        return jsonify({"error": "Student ID missing from session"}), 400
+        
+    eval_data = {
+        "course_id": course_id,
+        "student_id": student_id,
+        "student_email": session['user'].get('email'),
+        "ratings": ratings,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+    
+    try:
+        from models import put_evaluation
+        put_evaluation(course_id, student_id, eval_data)
+        return jsonify({"success": True, "message": "Evaluation submitted successfully"})
+    except Exception as e:
+        app.logger.exception(f"Failed to submit evaluation: {e}")
+        return jsonify({"error": "Database error"}), 500
+
+@app.route('/api/courses/<course_id>/evaluations', methods=['GET'])
+def get_evaluations(course_id):
+    if 'user' not in session or session['user'].get('role') != 'teacher':
+        return jsonify({"error": "Unauthorized"}), 403
+        
+    teacher = get_authenticated_teacher()
+    if not teacher:
+        return jsonify({"error": "Not authenticated"}), 401
+        
+    try:
+        from models import get_evaluations_by_course
+        evaluations = get_evaluations_by_course(course_id)
+        
+        if not evaluations:
+            return jsonify({"evaluations": [], "averages": {}})
+            
+        # Calculate averages
+        averages = {}
+        counts = {}
+        for ev in evaluations:
+            ratings = ev.get('ratings', {})
+            for key, val in ratings.items():
+                averages[key] = averages.get(key, 0) + val
+                counts[key] = counts.get(key, 0) + 1
+                
+        for key in averages:
+            averages[key] = round(averages[key] / counts[key], 2)
+            
+        return jsonify({
+            "evaluations": evaluations,
+            "averages": averages
+        })
+    except Exception as e:
+        app.logger.exception(f"Failed to get evaluations: {e}")
+        return jsonify({"error": "Database error"}), 500
+
+import csv
+import io
+from flask import make_response
+
+@app.route('/api/courses/<course_id>/evaluations/download', methods=['GET'])
+def download_evaluations(course_id):
+    if 'user' not in session or session['user'].get('role') != 'teacher':
+        return jsonify({"error": "Unauthorized"}), 403
+        
+    try:
+        from models import get_evaluations_by_course
+        evaluations = get_evaluations_by_course(course_id)
+        
+        si = io.StringIO()
+        cw = csv.writer(si)
+        # 10 Questions
+        questions = [
+            "Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10"
+        ]
+        headers = ['Student Email', 'Timestamp'] + questions
+        cw.writerow(headers)
+        
+        for ev in evaluations:
+            row = [ev.get('student_email', 'Unknown'), ev.get('timestamp', '')]
+            ratings = ev.get('ratings', {})
+            for q in questions:
+                row.append(ratings.get(q, ''))
+            cw.writerow(row)
+            
+        output = make_response(si.getvalue())
+        output.headers["Content-Disposition"] = f"attachment; filename=course_{course_id}_evaluations.csv"
+        output.headers["Content-type"] = "text/csv"
+        return output
+    except Exception as e:
+        app.logger.exception(f"Failed to generate CSV: {e}")
+        return jsonify({"error": "Failed to generate CSV"}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))

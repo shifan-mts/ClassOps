@@ -246,3 +246,19 @@ def put_feedback(course_id, assignment_id, student_id, feedback_data):
     feedback_data['SK'] = f"FEEDBACK#{assignment_id}#{student_id}"
     table.put_item(Item=sanitize_for_dynamodb(feedback_data))
     return feedback_data
+
+def put_evaluation(course_id, student_id, eval_data):
+    eval_data['PK'] = f"COURSE#{course_id}"
+    eval_data['SK'] = f"EVALUATION#{student_id}"
+    table.put_item(Item=sanitize_for_dynamodb(eval_data))
+    return eval_data
+
+def get_evaluations_by_course(course_id):
+    response = table.query(
+        KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_prefix)",
+        ExpressionAttributeValues={
+            ":pk": f"COURSE#{course_id}",
+            ":sk_prefix": "EVALUATION#"
+        }
+    )
+    return decimal_to_native(response.get('Items', []))

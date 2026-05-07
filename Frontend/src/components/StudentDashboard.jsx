@@ -7,6 +7,59 @@ const StudentDashboard = ({ API_BASE, onReadFeedback }) => {
   const [selectedCourseId, setSelectedCourseId] = useState(null);
   const [showTodayOnly, setShowTodayOnly] = useState(true);
 
+  // Evaluation Form State
+  const [showEvalForm, setShowEvalForm] = useState(false);
+  const [evalRatings, setEvalRatings] = useState({});
+  const [isSubmittingEval, setIsSubmittingEval] = useState(false);
+
+  const evalQuestions = [
+    { id: 'Q1', text: 'The course objectives were clearly explained.' },
+    { id: 'Q2', text: 'The syllabus content was relevant to the programme.' },
+    { id: 'Q3', text: 'The course content helped in improving subject knowledge.' },
+    { id: 'Q4', text: 'The prescribed textbook / reference materials were useful.' },
+    { id: 'Q5', text: 'The course improved my understanding of the subject and it helped in achieving learning outcomes.' },
+    { id: 'Q6', text: 'Internal assessments reflected the taught syllabus.' },
+    { id: 'Q7', text: 'Assignments / tests supported learning effectively.' },
+    { id: 'Q8', text: 'Evaluation methods were fair and transparent.' },
+    { id: 'Q9', text: 'The course improved problem-solving / analytical ability.' },
+    { id: 'Q10', text: 'The course helped in achieving the intended learning outcomes.' },
+  ];
+
+  const handleEvalChange = (qId, value) => {
+    setEvalRatings(prev => ({ ...prev, [qId]: parseInt(value) }));
+  };
+
+  const submitEvaluation = async () => {
+    if (Object.keys(evalRatings).length < 10) {
+      alert("Please answer all questions before submitting.");
+      return;
+    }
+    setIsSubmittingEval(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/student/evaluation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          course_id: selectedCourseId,
+          ratings: evalRatings
+        }),
+        credentials: 'include'
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert("Evaluation submitted successfully! Thank you for your feedback.");
+        setShowEvalForm(false);
+        setEvalRatings({});
+      } else {
+        alert(data.error || "Failed to submit evaluation.");
+      }
+    } catch (err) {
+      alert("Error submitting evaluation.");
+    } finally {
+      setIsSubmittingEval(false);
+    }
+  };
+
   useEffect(() => {
     const fetchDashboard = async () => {
       try {
@@ -252,7 +305,16 @@ const StudentDashboard = ({ API_BASE, onReadFeedback }) => {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '16px' }}>
                 {classrooms.map(c => (
                   <div key={c.id} 
-                    onClick={() => setSelectedCourseId(selectedCourseId === c.id ? null : c.id)}
+                    onClick={() => {
+                      if (selectedCourseId !== c.id) {
+                        setSelectedCourseId(c.id);
+                        setShowEvalForm(false);
+                        setEvalRatings({});
+                      } else {
+                        setSelectedCourseId(null);
+                        setShowEvalForm(false);
+                      }
+                    }}
                     style={{
                     padding: '20px', borderRadius: '18px', 
                     background: selectedCourseId === c.id ? '#1e293b' : '#0e1a25', 
@@ -284,38 +346,92 @@ const StudentDashboard = ({ API_BASE, onReadFeedback }) => {
                 <h3 style={{ color: '#0369a1' }}>Course Materials</h3>
                 <p style={{ color: '#0284c7' }}>Showing updates for {classrooms.find(c => c.id === selectedCourseId)?.name}</p>
               </div>
-              <button 
-                onClick={() => setSelectedCourseId(null)}
-                style={{ padding: '6px 12px', fontSize: '0.8rem', borderRadius: '8px', background: '#bae6fd', color: '#0369a1', border: 'none', cursor: 'pointer', fontWeight: 700 }}
-              >
-                Close View
-              </button>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button 
+                  onClick={() => setShowEvalForm(!showEvalForm)}
+                  style={{ padding: '6px 12px', fontSize: '0.8rem', borderRadius: '8px', background: showEvalForm ? '#e0f2fe' : '#0ea5e9', color: showEvalForm ? '#0369a1' : '#fff', border: 'none', cursor: 'pointer', fontWeight: 700 }}
+                >
+                  {showEvalForm ? "View Materials" : "Submit Evaluation"}
+                </button>
+                <button 
+                  onClick={() => {
+                    setSelectedCourseId(null);
+                    setShowEvalForm(false);
+                  }}
+                  style={{ padding: '6px 12px', fontSize: '0.8rem', borderRadius: '8px', background: '#bae6fd', color: '#0369a1', border: 'none', cursor: 'pointer', fontWeight: 700 }}
+                >
+                  Close View
+                </button>
+              </div>
             </div>
             <div className="card-body">
-              {displayedMaterials.length === 0 ? (
-                <div className="placeholder" style={{ color: '#0284c7' }}>No recent materials found for this class. (Note: Make sure to log out and log back in to grant Google Drive read permissions).</div>
-              ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' }}>
-                  {displayedMaterials.map(m => (
-                    <div key={m.id} style={{
-                      padding: '16px', borderRadius: '12px', background: '#fff', border: '1px solid #e0f2fe',
-                      display: 'flex', flexDirection: 'column', gap: '8px', boxShadow: '0 4px 6px rgba(14, 165, 233, 0.05)'
-                    }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                        <span style={{ fontSize: '0.75rem', fontWeight: 700, padding: '4px 8px', borderRadius: '6px', background: m.type === 'Material' ? '#dbeafe' : '#fef3c7', color: m.type === 'Material' ? '#1e40af' : '#92400e', textTransform: 'uppercase' }}>
-                          {m.type}
-                        </span>
-                        <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{formatDate(m.date)}</span>
+              {showEvalForm ? (
+                <div style={{ padding: '20px', background: '#fff', borderRadius: '12px', border: '1px solid #e0f2fe' }}>
+                  <h4 style={{ color: '#0f172a', marginBottom: '8px', marginTop: 0 }}>Course Evaluation</h4>
+                  <p style={{ color: '#64748b', fontSize: '0.9rem', marginBottom: '24px' }}>Please rate the following on a scale of 1 to 5 (5 being Excellent/Strongly Agree).</p>
+                  
+                  <div style={{ display: 'grid', gap: '20px' }}>
+                    {evalQuestions.map((q, idx) => (
+                      <div key={q.id} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div style={{ fontWeight: 600, color: '#334155', fontSize: '0.95rem' }}>
+                          {idx + 1}. {q.text}
+                        </div>
+                        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>1</span>
+                          {[1, 2, 3, 4, 5].map(val => (
+                            <label key={val} style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                              <input 
+                                type="radio" 
+                                name={q.id} 
+                                value={val}
+                                checked={evalRatings[q.id] === val}
+                                onChange={(e) => handleEvalChange(q.id, e.target.value)}
+                                style={{ cursor: 'pointer' }}
+                              />
+                              <span style={{ fontSize: '0.9rem', fontWeight: evalRatings[q.id] === val ? 700 : 400, color: evalRatings[q.id] === val ? '#0ea5e9' : '#64748b' }}>{val}</span>
+                            </label>
+                          ))}
+                          <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>5</span>
+                        </div>
                       </div>
-                      <div style={{ fontWeight: 600, color: '#0f172a', lineHeight: 1.4 }}>{m.title}</div>
-                      {m.url && (
-                        <a href={m.url} target="_blank" rel="noreferrer" style={{ marginTop: 'auto', display: 'inline-block', fontSize: '0.85rem', color: '#0ea5e9', fontWeight: 600, textDecoration: 'none' }}>
-                          View in Classroom &rarr;
-                        </a>
-                      )}
-                    </div>
-                  ))}
+                    ))}
+                  </div>
+
+                  <button 
+                    onClick={submitEvaluation}
+                    disabled={isSubmittingEval}
+                    className="primary"
+                    style={{ marginTop: '24px', padding: '10px 20px', width: '100%', borderRadius: '8px', opacity: isSubmittingEval ? 0.7 : 1 }}
+                  >
+                    {isSubmittingEval ? 'Submitting...' : 'Submit Final Evaluation'}
+                  </button>
                 </div>
+              ) : (
+                displayedMaterials.length === 0 ? (
+                  <div className="placeholder" style={{ color: '#0284c7' }}>No recent materials found for this class. (Note: Make sure to log out and log back in to grant Google Drive read permissions).</div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' }}>
+                    {displayedMaterials.map(m => (
+                      <div key={m.id} style={{
+                        padding: '16px', borderRadius: '12px', background: '#fff', border: '1px solid #e0f2fe',
+                        display: 'flex', flexDirection: 'column', gap: '8px', boxShadow: '0 4px 6px rgba(14, 165, 233, 0.05)'
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                          <span style={{ fontSize: '0.75rem', fontWeight: 700, padding: '4px 8px', borderRadius: '6px', background: m.type === 'Material' ? '#dbeafe' : '#fef3c7', color: m.type === 'Material' ? '#1e40af' : '#92400e', textTransform: 'uppercase' }}>
+                            {m.type}
+                          </span>
+                          <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{formatDate(m.date)}</span>
+                        </div>
+                        <div style={{ fontWeight: 600, color: '#0f172a', lineHeight: 1.4 }}>{m.title}</div>
+                        {m.url && (
+                          <a href={m.url} target="_blank" rel="noreferrer" style={{ marginTop: 'auto', display: 'inline-block', fontSize: '0.85rem', color: '#0ea5e9', fontWeight: 600, textDecoration: 'none' }}>
+                            View in Classroom &rarr;
+                          </a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )
               )}
             </div>
           </div>

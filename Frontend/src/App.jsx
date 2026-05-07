@@ -4,6 +4,8 @@ import Timetablegenerator from './components/ui/page/Timetablegenerator';
 import MeetAttendancePanel from './components/MeetAttendancePanel';
 import StudentDashboard from './components/StudentDashboard';
 import FeedbackPanel from './components/FeedbackPanel';
+import EvaluationPanel from './components/EvaluationPanel';
+
 function AttendanceReport({ report, loading, onRefresh }) {
   return (
     <div className="card">
@@ -152,7 +154,6 @@ export default function App() {
   const [timetableData, setTimetableData] = useState({});
   const [periodTimings, setPeriodTimings] = useState([]);
 
-  // Dynamically set API_BASE based on the environment (localhost vs production)
   const API_BASE = import.meta.env.DEV ? "http://localhost:5000" : window.location.origin;
 
   useEffect(() => {
@@ -198,7 +199,7 @@ export default function App() {
       const data = await res.json();
       if (res.ok) {
         alert("Server API Key updated successfully!");
-        setIsQuotaExceeded(false); // Hide the box as it's now updated
+        setIsQuotaExceeded(false);
       } else {
         alert(data.error || "Failed to update key.");
       }
@@ -582,7 +583,6 @@ export default function App() {
       }
     } catch (err) {
       console.error("Auth URL fetch failed", err);
-      // Fallback to direct redirect if API fails
       window.location.href = `${API_BASE}/api/auth/google`;
     }
   };
@@ -649,7 +649,6 @@ export default function App() {
       });
       const data = await res.json();
       if (res.ok && data.records) {
-        // Merge with existing students to ensure everyone is listed
         setAttendanceRecords(prev => {
           const updated = { ...prev };
           Object.entries(data.records).forEach(([sId, status]) => {
@@ -697,7 +696,6 @@ export default function App() {
     setError("");
     setIsGenerating(true);
     
-    // Find the course name for the selected ID
     const selectedCourse = courses.find(c => c.id.toString() === selectedCourseId);
     const courseName = selectedCourse ? selectedCourse.name : "General Course";
 
@@ -803,19 +801,23 @@ export default function App() {
     return <LandingPage onSignIn={handleSignIn} isSyncing={isSyncing} />;
   }
 
-  // Define tabs robustly: default to Teacher tabs unless explicitly a 'student'
-  const isStudent = user?.role === 'student';
-  const activeTabs = isStudent 
+  let activeTabs = user?.role === 'student' 
     ? [{ id: "student-dashboard", label: "Student Dashboard" }]
     : [
         { id: "overview", label: "Overview & Targets" },
         { id: "attendance", label: "Attendance" },
         { id: "meet", label: "Meet" },
-        { id: "ai-tools", label: "AI Tools" },
-        { id: "feedback", label: "Feedback & Grading" },
-        { id: "timetable", label: "Timetable" }
+        { id: "ai-tools", label: "AI Tools" }
       ];
 
+  if (user.role !== 'student') {
+    activeTabs = [
+      ...activeTabs,
+      { id: "feedback", label: "Grading" },
+      { id: "evaluations", label: "Course Evaluations" },
+      { id: "timetable", label: "Timetable" }
+    ];
+  }
 
   return (
     <div className="app">
@@ -865,6 +867,13 @@ export default function App() {
             initialAssignmentId={initialFeedbackAssignment}
             initialUserId={initialFeedbackStudent}
             readOnly={user?.role === 'student'}
+          />
+        )}
+        
+        {activeTab === 'evaluations' && (
+          <EvaluationPanel 
+            API_BASE={API_BASE} 
+            courseId={selectedCourseId} 
           />
         )}
 
