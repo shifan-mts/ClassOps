@@ -13,6 +13,16 @@ def parse_jerusalem_email(email: str, current_year: int = 2026):
         "current_year": None
     }
     
+    # Teacher bypass list
+    teacher_whitelist = [
+        "amohamedshifan1@gmail.com",
+        "bharadwajvaradan2005@gmail.com",
+        "bharatmannar@gmail.com"
+    ]
+    if email.lower() in teacher_whitelist:
+        result["role"] = "teacher"
+        return result
+    
     # Allow common typo for the domain
     if not email.endswith("@jerusalemengg.ac.in"):
         return result
