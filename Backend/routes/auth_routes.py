@@ -20,6 +20,11 @@ def google_auth_callback():
     return auth_controller.google_auth_callback()
 
 
+@auth_bp.route("/callback")
+def google_auth_callback_alias():
+    return auth_controller.google_auth_callback()
+
+
 @auth_bp.route("/api/me")
 def get_me():
     return auth_controller.get_me()

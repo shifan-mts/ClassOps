@@ -43,11 +43,26 @@ SCOPES = [
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 
-ALLOWED_CORS_ORIGINS = [
-    "https://classops-6.onrender.com",
+DEFAULT_CORS_ORIGINS = [
     "https://classops-6.onrender.com",
     "http://localhost:5173",
     "http://localhost:5000",
 ]
+
+
+def _split_env_list(value):
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+ALLOWED_CORS_ORIGINS = list(
+    dict.fromkeys(
+        DEFAULT_CORS_ORIGINS
+        + _split_env_list(os.getenv("CORS_ORIGINS"))
+        + _split_env_list(os.getenv("FRONTEND_URL"))
+        + _split_env_list(os.getenv("BASE_URL"))
+    )
+)
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]

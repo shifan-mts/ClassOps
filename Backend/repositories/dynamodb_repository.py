@@ -5,15 +5,24 @@ from dotenv import load_dotenv
 from utils.data_sanitizer import decimal_to_native, sanitize_for_dynamodb
 
 # Load environment variables from .env if present
-load_dotenv()
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(BACKEND_DIR, ".env"), encoding="utf-8-sig")
+
+
+def _env_bool(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 # Setup boto3 resource
 # Using os.getenv for credentials and region
-IS_LOCAL = os.getenv('IS_LOCAL', 'false').lower() == 'true'
+IS_LOCAL = _env_bool('IS_LOCAL')
 AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+AWS_SESSION_TOKEN = os.getenv('AWS_SESSION_TOKEN')
 AWS_REGION = os.getenv('AWS_REGION', 'eu-north-1')
-DYNAMODB_TABLE_NAME = os.getenv('DYNAMODB_TABLE')
+DYNAMODB_TABLE_NAME = os.getenv('DYNAMODB_TABLE') or os.getenv('DYNAMODB_TABLE_NAME')
 
 if not DYNAMODB_TABLE_NAME:
     if IS_LOCAL:
@@ -37,11 +46,21 @@ if IS_LOCAL:
     )
 else:
     print(f"Connecting to production DynamoDB in {AWS_REGION}")
+    aws_resource_kwargs = {
+        'region_name': AWS_REGION,
+    }
+    if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY:
+        aws_resource_kwargs.update(
+            {
+                'aws_access_key_id': AWS_ACCESS_KEY_ID,
+                'aws_secret_access_key': AWS_SECRET_ACCESS_KEY,
+            }
+        )
+    if AWS_SESSION_TOKEN:
+        aws_resource_kwargs['aws_session_token'] = AWS_SESSION_TOKEN
     dynamodb = boto3.resource(
         'dynamodb',
-        region_name=AWS_REGION,
-        aws_access_key_id=AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+        **aws_resource_kwargs
     )
 
 table = dynamodb.Table(DYNAMODB_TABLE_NAME)

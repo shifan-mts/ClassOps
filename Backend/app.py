@@ -8,9 +8,19 @@ BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
-load_dotenv(os.path.join(BACKEND_DIR, ".env"))
-os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
-os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
+load_dotenv(os.path.join(BACKEND_DIR, ".env"), encoding="utf-8-sig")
+
+
+def _env_bool(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
+if _env_bool("ALLOW_INSECURE_OAUTH", _env_bool("IS_LOCAL", True)):
+    os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
 
 from config.settings import configure_app  # noqa: E402
 from routes import register_blueprints  # noqa: E402

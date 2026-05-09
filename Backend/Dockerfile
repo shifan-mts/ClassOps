@@ -20,5 +20,5 @@ EXPOSE 5000
 ENV FLASK_APP=app.py
 ENV PORT=5000
 
-# Run app.py when the container launches
-CMD ["python", "app.py"]
+# Run with a production WSGI server. PORT is provided by most cloud platforms.
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-5000} app:app"]

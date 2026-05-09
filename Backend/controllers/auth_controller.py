@@ -1,3 +1,5 @@
+import base64
+import json
 import os
 
 from flask import current_app, jsonify, redirect, request, session
@@ -15,8 +17,39 @@ from services.google_service import (
 from services.teacher_service import get_authenticated_teacher
 
 
+def _load_google_client_config_from_env():
+    raw_config = os.getenv("GOOGLE_CLIENT_SECRETS_JSON")
+    raw_config_b64 = os.getenv("GOOGLE_CLIENT_SECRETS_B64")
+    if raw_config_b64 and not raw_config:
+        raw_config = base64.b64decode(raw_config_b64).decode("utf-8")
+    if raw_config:
+        return json.loads(raw_config)
+
+    client_id = os.getenv("GOOGLE_CLIENT_ID")
+    client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
+    if client_id and client_secret:
+        return {
+            "web": {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [os.getenv("REDIRECT_URI")] if os.getenv("REDIRECT_URI") else [],
+            }
+        }
+
+    return None
+
+
+def _create_oauth_flow(state=None):
+    client_config = _load_google_client_config_from_env()
+    if client_config:
+        return Flow.from_client_config(client_config, scopes=SCOPES, state=state)
+    return Flow.from_client_secrets_file(CLIENT_SECRETS_FILE, scopes=SCOPES, state=state)
+
+
 def google_auth():
-    flow = Flow.from_client_secrets_file(CLIENT_SECRETS_FILE, scopes=SCOPES)
+    flow = _create_oauth_flow()
     flow.redirect_uri = get_redirect_uri()
     authorization_url, state = flow.authorization_url(
         access_type="offline",
@@ -30,7 +63,7 @@ def google_auth():
 
 
 def google_auth_url():
-    flow = Flow.from_client_secrets_file(CLIENT_SECRETS_FILE, scopes=SCOPES)
+    flow = _create_oauth_flow()
     flow.redirect_uri = get_redirect_uri()
     authorization_url, state = flow.authorization_url(
         access_type="offline",
@@ -57,7 +90,7 @@ def google_auth_callback():
 
     try:
         url_state = request.args.get("state")
-        flow = Flow.from_client_secrets_file(CLIENT_SECRETS_FILE, scopes=SCOPES, state=url_state or state)
+        flow = _create_oauth_flow(state=url_state or state)
         flow.redirect_uri = get_redirect_uri()
 
         base = os.getenv("BASE_URL", request.host_url.rstrip("/"))

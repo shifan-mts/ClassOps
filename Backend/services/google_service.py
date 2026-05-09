@@ -51,6 +51,10 @@ def get_missing_scopes(*required_scopes):
 def get_redirect_uri():
     import os
 
+    explicit_redirect_uri = os.getenv("REDIRECT_URI")
+    if explicit_redirect_uri:
+        return explicit_redirect_uri
+
     base = os.getenv("BASE_URL", request.host_url.rstrip("/"))
     if "onrender.com" in base:
         base = base.replace("http://", "https://")

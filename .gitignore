@@ -1,4 +1,6 @@
 /Backend/.venv
+/Backend/.env
+/Backend/client_secret.json
 /docker
 /backend/__pycache__
 /backend/instance/
