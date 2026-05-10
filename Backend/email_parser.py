@@ -27,28 +27,25 @@ def parse_jerusalem_email(email: str, current_year: int = 2026):
     if not email.endswith("@jerusalemengg.ac.in"):
         return result
         
+    # Check if the email local part ends with a 4-digit year (student pattern)
     local_part = email.split('@')[0].lower()
     
-    # Standard list of likely departments based on typical engineering colleges
-    known_depts = ["cse", "ece", "eee", "it", "mech", "civil", "bme", "aids", "csbs", "ai", "ds", "mba", "mca"]
-    dept_pattern = '|'.join(sorted(known_depts, key=len, reverse=True))
-    
-    # Regex: (any letters for name) + (known department) + (4 digits for year)
-    student_pattern = r'^[a-z]+?(' + dept_pattern + r')(\d{4})$'
-    match = re.search(student_pattern, local_part)
+    # Check for 4 digits at the end of the local part (e.g., name2023, name-dept2024)
+    match = re.search(r'(\d{4})$', local_part)
     
     if match:
-        dept = match.group(1)
-        batch = int(match.group(2))
-        grade_year = current_year - batch
+        batch = int(match.group(1))
+        # Optional: Try to extract department if it precedes the year
+        # e.g., 'shifan-it2023' -> 'IT'
+        known_depts = ["cse", "ece", "eee", "it", "mech", "civil", "bme", "aids", "csbs", "ai", "ds", "mba", "mca"]
+        dept_match = re.search(r'(' + '|'.join(known_depts) + r')', local_part)
         
         result["role"] = "student"
-        result["dept"] = dept.upper()
+        result["dept"] = dept_match.group(1).upper() if dept_match else "UNKNOWN"
         result["batch"] = batch
-        result["current_year"] = grade_year if grade_year > 0 else None
+        result["current_year"] = current_year - batch if (current_year - batch) > 0 else None
     else:
-        # If it's from the college domain but doesn't have the student pattern (dept + year),
-        # it must be a teacher!
+        # If it's from the college domain but doesn't have a year at the end, it's a teacher
         result["role"] = "teacher"
         
     return result

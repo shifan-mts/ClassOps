@@ -58,6 +58,9 @@ def get_redirect_uri():
     base = os.getenv("BASE_URL", request.host_url.rstrip("/"))
     if "onrender.com" in base:
         base = base.replace("http://", "https://")
+    elif "127.0.0.1" in base:
+        base = base.replace("127.0.0.1", "localhost")
+        
     return f"{base}/api/auth/google/callback"
 
 

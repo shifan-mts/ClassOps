@@ -53,12 +53,11 @@ def google_auth():
     flow.redirect_uri = get_redirect_uri()
     authorization_url, state = flow.authorization_url(
         access_type="offline",
-        include_granted_scopes="false",
         prompt="consent",
-        code_challenge_method="S256",
     )
     session["state"] = state
     session["code_verifier"] = flow.code_verifier
+    session.modified = True
     return redirect(authorization_url)
 
 
@@ -67,9 +66,7 @@ def google_auth_url():
     flow.redirect_uri = get_redirect_uri()
     authorization_url, state = flow.authorization_url(
         access_type="offline",
-        include_granted_scopes="false",
         prompt="consent",
-        code_challenge_method="S256",
     )
     session["state"] = state
     session["code_verifier"] = flow.code_verifier
@@ -84,6 +81,7 @@ def google_auth_callback():
     if not state:
         current_app.logger.error("No state found in session")
         return jsonify({"error": "Missing OAuth state. Please enable cookies and try again."}), 400
+    
     if not code_verifier:
         current_app.logger.error("No code_verifier found in session")
         return jsonify({"error": "Missing OAuth code verifier. Please try again."}), 400
@@ -93,23 +91,25 @@ def google_auth_callback():
         flow = _create_oauth_flow(state=url_state or state)
         flow.redirect_uri = get_redirect_uri()
 
+        # Build authorization response URL accurately
+        authorization_response = request.url
+        # For security and consistency, ensure the protocol and host match expectations
         base = os.getenv("BASE_URL", request.host_url.rstrip("/"))
         if "onrender.com" in base:
-            base = base.replace("http://", "https://")
-            frontend_url = base
-        else:
-            frontend_url = "http://localhost:5173"
-
-        authorization_response = request.url
-        if "onrender.com" in authorization_response:
             authorization_response = authorization_response.replace("http://", "https://")
-        elif "127.0.0.1" in authorization_response:
+        elif "localhost" in base and "127.0.0.1" in authorization_response:
             authorization_response = authorization_response.replace("127.0.0.1", "localhost")
 
         flow.fetch_token(authorization_response=authorization_response, code_verifier=code_verifier)
 
         credentials = flow.credentials
         session["credentials"] = build_credentials_payload(credentials)
+
+        # Define frontend_url for redirect
+        if "onrender.com" in base:
+            frontend_url = base
+        else:
+            frontend_url = "http://localhost:5173"
 
         user_info_service = build("oauth2", "v2", credentials=credentials)
         user_info = user_info_service.userinfo().get().execute()
@@ -160,19 +160,6 @@ def google_auth_callback():
 
 
 def get_me():
-    if request.host.startswith("localhost") or request.host.startswith("127.0.0.1"):
-        return jsonify(
-            {
-                "authenticated": True,
-                "user": {
-                    "id": "123",
-                    "email": "test@example.com",
-                    "name": "Test User",
-                    "picture": "",
-                    "role": "teacher",
-                },
-            }
-        )
     if "user" not in session:
         return jsonify({"authenticated": False}), 401
 

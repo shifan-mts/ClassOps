@@ -1,10 +1,42 @@
-/Backend/.venv
-/Backend/.env
-/Backend/client_secret.json
-/docker
-/backend/__pycache__
-/backend/instance/
-/frontend/node_modules/
-package-lock.json
-docker-compose.yml
-/flask_session
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific
+.env
+*.json
+!package.json
+!jsconfig.json
+client_secret.json
+GOOGLE_CLIENT_SECRETS.json
+
+# Backend
+Backend/__pycache__/
+Backend/instance/
+Backend/dist/
+Backend/sessions/
+Backend/.env
+Backend/client_secret.json
+
+# Frontend
+Frontend/node_modules/
+Frontend/dist/
+Frontend/.env
+Frontend/package-lock.json
+
+# OS files
+.DS_Store
+Thumbs.db
