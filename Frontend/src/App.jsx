@@ -130,10 +130,17 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/me`, { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
-        if (data.authenticated) setUser(data.user);
+        if (data.authenticated) {
+          setUser(data.user);
+        } else {
+          setUser(null);
+        }
+      } else {
+        setUser(null);
       }
     } catch (err) {
       console.error("Failed to fetch user session", err);
+      setUser(null);
     } finally {
       setAuthChecked(true);
     }
@@ -363,25 +370,35 @@ export default function App() {
   };
 
   const saveAttendance = async () => {
+    if (!selectedCourseId) {
+      alert("Please select a subject first.");
+      return;
+    }
     try {
       const records = Object.entries(attendanceRecords).map(([id, status]) => ({
-        student_id: parseInt(id),
+        student_id: id, // Removed parseInt to support string IDs/Roll numbers
         status
       }));
-      await fetch(`${API_BASE}/api/attendance`, {
+      const res = await fetch(`${API_BASE}/api/attendance`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          course_id: parseInt(selectedCourseId),
+          course_id: selectedCourseId,
           date: attendanceDate,
           records
         }),
         credentials: "include"
       });
-      alert("Attendance saved!");
-      fetchReport(selectedCourseId);
+      if (res.ok) {
+        alert("Attendance saved successfully!");
+        fetchReport(selectedCourseId);
+      } else {
+        const data = await res.json();
+        alert(data.error || "Failed to save attendance.");
+      }
     } catch (err) {
-      alert("Save failed.");
+      console.error("Save attendance error:", err);
+      alert("Error saving attendance");
     }
   };
 

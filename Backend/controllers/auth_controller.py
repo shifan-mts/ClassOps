@@ -53,7 +53,7 @@ def google_auth():
     flow.redirect_uri = get_redirect_uri()
     authorization_url, state = flow.authorization_url(
         access_type="offline",
-        prompt="consent",
+        prompt="select_account consent",
     )
     session["state"] = state
     session["code_verifier"] = flow.code_verifier
@@ -66,7 +66,7 @@ def google_auth_url():
     flow.redirect_uri = get_redirect_uri()
     authorization_url, state = flow.authorization_url(
         access_type="offline",
-        prompt="consent",
+        prompt="select_account consent",
     )
     session["state"] = state
     session["code_verifier"] = flow.code_verifier
@@ -93,7 +93,6 @@ def google_auth_callback():
 
         # Build authorization response URL accurately
         authorization_response = request.url
-        # For security and consistency, ensure the protocol and host match expectations
         base = os.getenv("BASE_URL", request.host_url.rstrip("/"))
         if "onrender.com" in base:
             authorization_response = authorization_response.replace("http://", "https://")
@@ -103,39 +102,49 @@ def google_auth_callback():
         flow.fetch_token(authorization_response=authorization_response, code_verifier=code_verifier)
 
         credentials = flow.credentials
-        session["credentials"] = build_credentials_payload(credentials)
-
-        # Define frontend_url for redirect
-        if "onrender.com" in base:
-            frontend_url = base
-        else:
-            frontend_url = "http://localhost:5173"
-
+        
+        # Get user info BEFORE setting session data
         user_info_service = build("oauth2", "v2", credentials=credentials)
         user_info = user_info_service.userinfo().get().execute()
-        session["user"] = {
-            "id": user_info.get("id"),
-            "email": user_info.get("email"),
-            "name": user_info.get("name"),
-            "picture": user_info.get("picture"),
-        }
-
+        
         email = user_info.get("email")
         name = user_info.get("name", "Unknown User")
-
+        
+        # Verify role before committing to the session
         parsed = parse_jerusalem_email(email)
         if email == "angelinehephzibahj@gmail.com":
             parsed["role"] = "teacher"
 
         if parsed["role"] == "unknown":
+            session.clear()
             return jsonify({"error": "Unauthorized. Please use a valid college email address."}), 403
 
-        session["user"]["role"] = parsed["role"]
-        if parsed["role"] == "student":
-            session["user"]["dept"] = parsed.get("dept")
-            session["user"]["batch"] = parsed.get("batch")
-            session["user"]["current_year"] = parsed.get("current_year")
+        # Prepare user object
+        user_data = {
+            "id": user_info.get("id"),
+            "email": email,
+            "name": name,
+            "picture": user_info.get("picture"),
+            "role": parsed["role"]
+        }
 
+        if parsed["role"] == "student":
+            user_data["dept"] = parsed.get("dept")
+            user_data["batch"] = parsed.get("batch")
+            user_data["current_year"] = parsed.get("current_year")
+
+        # COMMIT to session only after full validation
+        session["user"] = user_data
+        session["credentials"] = build_credentials_payload(credentials)
+        session.modified = True
+
+        # Frontend redirect URL
+        if "onrender.com" in base:
+            frontend_url = base
+        else:
+            frontend_url = "http://localhost:5173"
+
+        # Perform teacher-specific initialization
         if parsed["role"] == "teacher":
             teacher = db.get_teacher(email)
             if not teacher:
@@ -146,16 +155,17 @@ def google_auth_callback():
                     "period_timings": {},
                 }
                 db.put_teacher(teacher)
-
-        try:
-            sync_classroom_data(session["credentials"])
-        except Exception as exc:
-            current_app.logger.exception("Classroom sync failed: %s", exc)
+            
+            try:
+                sync_classroom_data(session["credentials"])
+            except Exception as exc:
+                current_app.logger.exception("Classroom sync failed: %s", exc)
 
         return redirect(f"{frontend_url}/")
 
     except Exception as exc:
         current_app.logger.exception("OAuth callback error: %s", exc)
+        session.clear()
         return jsonify({"error": str(exc)}), 500
 
 

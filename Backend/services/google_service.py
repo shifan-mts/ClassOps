@@ -336,18 +336,8 @@ def sync_classroom_data(credentials_dict=None):
         raise ValueError("User info not found in session.")
 
     email = user_info.get("email")
-    name = user_info.get("name", "Unknown Teacher")
 
-    teacher = db.get_teacher(email)
-    if not teacher:
-        teacher = {
-            "email": email,
-            "name": name,
-            "availability": {},
-            "period_timings": {},
-        }
-        db.put_teacher(teacher)
-
+    # Fetch courses from Google Classroom
     results = service.courses().list(pageSize=10).execute()
     courses_data = results.get("courses", [])
 
@@ -366,7 +356,9 @@ def sync_classroom_data(credentials_dict=None):
             }
             db.put_course(email, new_course)
         else:
-            existing["teacher_id"] = email
-            db.put_course(email, existing)
+            # Update teacher association if needed
+            if existing.get("teacher_id") != email:
+                existing["teacher_id"] = email
+                db.put_course(email, existing)
 
     return courses_data
