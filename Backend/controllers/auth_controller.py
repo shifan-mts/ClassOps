@@ -122,8 +122,9 @@ def google_auth_callback():
             parsed["role"] = explicit_role["role"]
 
         if parsed["role"] == "unknown":
-            session.clear()
-            return jsonify({"error": "Unauthorized. Please use a valid college email address."}), 403
+            # Fallback to visitor instead of denying access
+            parsed["role"] = "visitor"
+            current_app.logger.info(f"Unauthorized email {email} assigned visitor role.")
 
         # Fetch permissions from DB, fallback to static config
         role_record = db.get_role(parsed["role"])
