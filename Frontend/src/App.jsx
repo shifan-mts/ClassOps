@@ -410,6 +410,38 @@ export default function App() {
     }
   };
 
+  const handleMarkAllPresent = () => {
+    setAttendanceRecords(prev => {
+      const next = { ...prev };
+      students.forEach(s => {
+        next[s.id] = "Present";
+      });
+      return next;
+    });
+  };
+
+  const handleExportCSV = () => {
+    if (students.length === 0) return alert("No data to export.");
+    const headers = ["Roll Number", "Name", "Status"];
+    const rows = students.map(s => [
+      s.roll_number,
+      s.name,
+      attendanceRecords[s.id] || "Present"
+    ]);
+    
+    let csvContent = "data:text/csv;charset=utf-8," 
+      + headers.join(",") + "\n"
+      + rows.map(e => e.join(",")).join("\n");
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `attendance_${selectedCourseId}_${attendanceDate}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const fetchReport = async (courseId) => {
     if (!courseId) return;
     setIsReportLoading(true);
@@ -577,6 +609,8 @@ export default function App() {
             students={students}
             attendanceRecords={attendanceRecords}
             handleAttendanceChange={(id, stat) => setAttendanceRecords(p => ({ ...p, [id]: stat }))}
+            handleMarkAllPresent={handleMarkAllPresent}
+            handleExportCSV={handleExportCSV}
             report={report}
             isReportLoading={isReportLoading}
             fetchReport={() => fetchReport(selectedCourseId)}
