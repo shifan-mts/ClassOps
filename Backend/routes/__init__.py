@@ -10,6 +10,7 @@ from routes.target_routes import target_bp
 from routes.teacher_routes import teacher_bp
 from routes.rbac_routes import rbac_bp
 from routes.dashboard_routes import dashboard_bp
+from routes.admin_routes import admin_bp
 
 
 def register_blueprints(app):
@@ -25,3 +26,4 @@ def register_blueprints(app):
     app.register_blueprint(student_bp)
     app.register_blueprint(rbac_bp)
     app.register_blueprint(dashboard_bp)
+    app.register_blueprint(admin_bp)

@@ -1,21 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
+import { usePermissions } from './context/PermissionContext';
 
 // Components
 import Header from './components/Header';
 import LandingPage from './components/LandingPage';
-import OverviewPanel from './components/OverviewPanel';
+import DashboardPanel from './components/DashboardPanel';
 import AttendancePanel from './components/AttendancePanel';
 import AIToolsPanel from './components/AIToolsPanel';
 import EvaluationPanel from './components/EvaluationPanel';
 import MeetAttendancePanel from './components/MeetAttendancePanel';
-import DashboardRouter from './components/DashboardRouter';
+import StudentDashboard from './components/StudentDashboard';
 import Timetablegenerator from './components/ui/page/Timetablegenerator';
-import AdminPanel from './components/AdminPanel';
 
 export default function App() {
+  const { hasPermission, loading: permsLoading, refreshPermissions } = usePermissions();
+  
   // --- State ---
-  const [activeTab, setActiveTab] = useState("dashboard");
+  const [activeTab, setActiveTab] = useState("");
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [courses, setCourses] = useState([]);
@@ -26,6 +28,9 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
   
+  // Stats for the unified Dashboard
+  const [stats, setStats] = useState(null);
+
   // AI Tools State
   const [qPaperTopic, setQPaperTopic] = useState("");
   const [generatedPaper, setGeneratedPaper] = useState("");
@@ -69,7 +74,7 @@ export default function App() {
   const [timetableData, setTimetableData] = useState({});
   const [periodTimings, setPeriodTimings] = useState([]);
   
-  // Feedback / Evaluation Selection State
+  // Feedback Selection State
   const [initialFeedbackStudent, setInitialFeedbackStudent] = useState("");
   const [initialFeedbackAssignment, setInitialFeedbackAssignment] = useState("");
 
@@ -84,14 +89,16 @@ export default function App() {
   useEffect(() => {
     if (user) {
       fetchTimetableData();
+      fetchDashboardStats();
+      refreshPermissions();
       
-      const userPermissions = user?.permissions || {};
-      const accessibleTabs = [
-        "dashboard", "overview", "attendance", "meet", 
-        "ai-tools", "evaluations", "timetable", "admin_settings"
-      ].filter(id => (userPermissions[id] || []).includes("access"));
+      const allPossibleTabIds = [
+        "teacher-dashboard", "student-dashboard", "attendance", "meet", "ai-tools", "evaluation", "timetable"
+      ];
+      
+      const accessibleTabs = allPossibleTabIds.filter(id => hasPermission(id, "view") || hasPermission(id, "edit") || hasPermission(id, "access"));
 
-      if (accessibleTabs.length > 0 && !accessibleTabs.includes(activeTab)) {
+      if (accessibleTabs.length > 0 && (!activeTab || !accessibleTabs.includes(activeTab))) {
         setActiveTab(accessibleTabs[0]);
       }
     } else {
@@ -104,6 +111,9 @@ export default function App() {
     if (activeTab === "meet" || activeTab === "timetable") {
       fetchTimetableData();
     }
+    if (activeTab === "teacher-dashboard") {
+      fetchDashboardStats();
+    }
   }, [activeTab]);
 
   useEffect(() => {
@@ -111,19 +121,10 @@ export default function App() {
       fetchAssignments(selectedCourseId);
       fetchStudents(selectedCourseId);
       fetchReport(selectedCourseId);
+      fetchTargets(selectedCourseId);
+      fetchComplianceMetrics(selectedCourseId);
     }
   }, [selectedCourseId]);
-
-  useEffect(() => {
-    if (user) {
-      if (selectedCourseId) {
-        fetchTargets(selectedCourseId);
-        fetchComplianceMetrics(selectedCourseId);
-      } else {
-        fetchComplianceMetrics("");
-      }
-    }
-  }, [selectedCourseId, user]);
 
   useEffect(() => {
     if (selectedCourseId && attendanceDate) {
@@ -138,14 +139,9 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/me`, { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
-        if (data.authenticated) {
-          setUser(data.user);
-        } else {
-          setUser(null);
-        }
-      } else {
-        setUser(null);
-      }
+        if (data.authenticated) setUser(data.user);
+        else setUser(null);
+      } else setUser(null);
     } catch (err) {
       console.error("Failed to fetch user session", err);
       setUser(null);
@@ -165,11 +161,18 @@ export default function App() {
           const firstActive = coursesList.find(c => Number(c?.hours_per_week || 0) > 0);
           setSelectedCourseId((firstActive || coursesList[0]).id.toString());
         }
-      } else if (res.status === 401) {
-        setUser(null);
-      }
+      } else if (res.status === 401) setUser(null);
     } catch (err) {
       console.error("Failed to fetch courses", err);
+    }
+  };
+
+  const fetchDashboardStats = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/dashboard/stats`, { credentials: "include" });
+      if (res.ok) setStats(await res.json());
+    } catch (err) {
+      console.error("Failed to fetch stats", err);
     }
   };
 
@@ -384,7 +387,7 @@ export default function App() {
     }
     try {
       const records = Object.entries(attendanceRecords).map(([id, status]) => ({
-        student_id: id, // Removed parseInt to support string IDs/Roll numbers
+        student_id: id,
         status
       }));
       const res = await fetch(`${API_BASE}/api/attendance`, {
@@ -413,9 +416,7 @@ export default function App() {
   const handleMarkAllPresent = () => {
     setAttendanceRecords(prev => {
       const next = { ...prev };
-      students.forEach(s => {
-        next[s.id] = "Present";
-      });
+      students.forEach(s => { next[s.id] = "Present"; });
       return next;
     });
   };
@@ -423,16 +424,8 @@ export default function App() {
   const handleExportCSV = () => {
     if (students.length === 0) return alert("No data to export.");
     const headers = ["Roll Number", "Name", "Status"];
-    const rows = students.map(s => [
-      s.roll_number,
-      s.name,
-      attendanceRecords[s.id] || "Present"
-    ]);
-    
-    let csvContent = "data:text/csv;charset=utf-8," 
-      + headers.join(",") + "\n"
-      + rows.map(e => e.join(",")).join("\n");
-
+    const rows = students.map(s => [s.roll_number, s.name, attendanceRecords[s.id] || "Present"]);
+    let csvContent = "data:text/csv;charset=utf-8," + headers.join(",") + "\n" + rows.map(e => e.join(",")).join("\n");
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
@@ -531,22 +524,21 @@ export default function App() {
     }
   };
 
-  if (!authChecked) return <div className="app"><div className="placeholder">Loading...</div></div>;
+  if (!authChecked) return <div className="app"><div className="placeholder">Loading ClassOps...</div></div>;
   if (!user) return <LandingPage onSignIn={handleSignIn} isSyncing={isSyncing} />;
 
-  const allTabs = [
-    { id: "dashboard", label: "Dashboard" },
-    { id: "overview", label: "Overview" },
+  // Dynamic Tab Calculation
+  const allPossibleTabs = [
+    { id: "teacher-dashboard", label: "Insights" },
+    { id: "student-dashboard", label: "Portal" },
     { id: "attendance", label: "Attendance" },
     { id: "meet", label: "Meet" },
     { id: "ai-tools", label: "AI Tools" },
-    { id: "evaluations", label: "Evaluations" },
-    { id: "timetable", label: "Timetable" },
-    { id: "admin_settings", label: "Role Management" }
+    { id: "evaluation", label: "Evaluations" },
+    { id: "timetable", label: "Timetable" }
   ];
 
-  const userPermissions = user.permissions || {};
-  const tabs = allTabs.filter(tab => (userPermissions[tab.id] || []).includes("access"));
+  const tabs = allPossibleTabs.filter(tab => hasPermission(tab.id, "view") || hasPermission(tab.id, "edit"));
 
   return (
     <div className="app">
@@ -565,9 +557,25 @@ export default function App() {
           ))}
         </div>
 
-        {activeTab === "overview" && (
-          <OverviewPanel 
-            permissions={userPermissions["overview"] || []} 
+        {/* Dynamic Panel Rendering */}
+        
+        {activeTab === "student-dashboard" && (hasPermission("student-dashboard", "view") || hasPermission("student-dashboard", "edit")) && (
+          <StudentDashboard 
+            API_BASE={API_BASE} 
+            user={user}
+            onReadFeedback={(c, a) => {
+              setSelectedCourseId(c);
+              setInitialFeedbackAssignment(a);
+              setInitialFeedbackStudent(user?.google_student_id || user?.id);
+              setActiveTab("evaluation");
+            }}
+          />
+        )}
+
+        {activeTab === "teacher-dashboard" && (hasPermission("teacher-dashboard", "view") || hasPermission("teacher-dashboard", "edit")) && (
+          <DashboardPanel 
+            user={user}
+            stats={stats}
             selectedCourseId={selectedCourseId}
             setSelectedCourseId={setSelectedCourseId}
             courses={courses}
@@ -581,23 +589,16 @@ export default function App() {
             isSavingTarget={isSavingTarget}
             targets={targets}
             targetsLoading={targetsLoading}
-            targetsError={targetsError}
             toggleTargetStatus={toggleTargetStatus}
-            formatTargetDate={d => d}
             complianceMetrics={complianceMetrics}
-            metricsLoading={metricsLoading}
-            metricsError={metricsError}
             generateComplianceReport={generateComplianceReport}
-            complianceMessage={complianceMessage}
             handleSyncCourses={handleSyncCourses}
             isSyncing={isSyncing}
-            syncError={syncError}
           />
         )}
 
-        {activeTab === "attendance" && (
+        {activeTab === "attendance" && (hasPermission("attendance", "view") || hasPermission("attendance", "edit")) && (
           <AttendancePanel 
-            permissions={userPermissions["attendance"] || []} 
             selectedCourseId={selectedCourseId}
             setSelectedCourseId={setSelectedCourseId}
             courses={courses}
@@ -616,12 +617,12 @@ export default function App() {
             fetchReport={() => fetchReport(selectedCourseId)}
             onViewFeedback={(studentId) => {
               if (studentId) setInitialFeedbackStudent(studentId);
-              setActiveTab("evaluations");
+              setActiveTab("evaluation");
             }}
           />
         )}
 
-        {activeTab === "meet" && (
+        {activeTab === "meet" && (hasPermission("meet", "view") || hasPermission("meet", "edit")) && (
           <MeetAttendancePanel
             apiBase={API_BASE}
             courses={courses}
@@ -643,9 +644,8 @@ export default function App() {
           />
         )}
 
-        {activeTab === "ai-tools" && (
+        {activeTab === "ai-tools" && (hasPermission("ai-tools", "view") || hasPermission("ai-tools", "edit")) && (
           <AIToolsPanel 
-            permissions={userPermissions["ai-tools"] || []} 
             isQuotaExceeded={isQuotaExceeded}
             customApiKey={customApiKey}
             setCustomApiKey={setCustomApiKey}
@@ -696,21 +696,8 @@ export default function App() {
           />
         )}
 
-        {activeTab === "evaluations" && <EvaluationPanel API_BASE={API_BASE} courseId={selectedCourseId} />}
-        {activeTab === "timetable" && <Timetablegenerator courses={courses} />}
-        {activeTab === "dashboard" && (
-          <DashboardRouter 
-            API_BASE={API_BASE} 
-            user={user}
-            onReadFeedback={(courseId, assignmentId) => {
-              if (courseId) setSelectedCourseId(courseId);
-              setInitialFeedbackAssignment(assignmentId);
-              setInitialFeedbackStudent(user?.google_student_id || user?.id);
-              setActiveTab("evaluations");
-            }}
-          />
-        )}
-        {activeTab === "admin_settings" && <AdminPanel API_BASE={API_BASE} />}
+        {activeTab === "evaluation" && (hasPermission("evaluation", "view") || hasPermission("evaluation", "edit")) && <EvaluationPanel API_BASE={API_BASE} courseId={selectedCourseId} />}
+        {activeTab === "timetable" && (hasPermission("timetable", "view") || hasPermission("timetable", "edit")) && <Timetablegenerator courses={courses} />}
       </div>
     </div>
   );

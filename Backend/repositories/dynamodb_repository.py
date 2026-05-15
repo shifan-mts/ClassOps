@@ -387,3 +387,39 @@ def scan_all_user_roles():
         }
     )
     return decimal_to_native(response.get('Items', []))
+
+# --- Component Registry Operations ---
+
+def get_component(comp_id):
+    response = table.get_item(
+        Key={
+            'PK': 'COMPONENT_REGISTRY',
+            'SK': f"COMP#{comp_id}"
+        }
+    )
+    return decimal_to_native(response.get('Item'))
+
+def put_component(comp_data):
+    comp_id = comp_data.get('id')
+    comp_data['PK'] = 'COMPONENT_REGISTRY'
+    comp_data['SK'] = f"COMP#{comp_id}"
+    table.put_item(Item=sanitize_for_dynamodb(comp_data))
+    return comp_data
+
+def scan_all_components():
+    response = table.query(
+        KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_prefix)",
+        ExpressionAttributeValues={
+            ":pk": "COMPONENT_REGISTRY",
+            ":sk_prefix": "COMP#"
+        }
+    )
+    return decimal_to_native(response.get('Items', []))
+
+def delete_component(comp_id):
+    table.delete_item(
+        Key={
+            'PK': 'COMPONENT_REGISTRY',
+            'SK': f"COMP#{comp_id}"
+        }
+    )
