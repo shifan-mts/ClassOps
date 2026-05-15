@@ -9,8 +9,14 @@ from utils.meet_helpers import build_meet_link, normalize_email, normalize_meeti
 def get_courses():
     if "user" not in session:
         return jsonify({"error": "Not authenticated"}), 401
-    teacher = get_authenticated_teacher()
-    courses = db.get_courses_by_teacher(teacher["email"]) if teacher else []
+        
+    user = session["user"]
+    if user.get("role") == "admin":
+        courses = db.get_all_courses()
+    else:
+        teacher = get_authenticated_teacher()
+        courses = db.get_courses_by_teacher(teacher["email"]) if teacher else []
+        
     return jsonify(
         [
             {

@@ -9,12 +9,13 @@ import AttendancePanel from './components/AttendancePanel';
 import AIToolsPanel from './components/AIToolsPanel';
 import EvaluationPanel from './components/EvaluationPanel';
 import MeetAttendancePanel from './components/MeetAttendancePanel';
-import StudentDashboard from './components/StudentDashboard';
+import DashboardRouter from './components/DashboardRouter';
 import Timetablegenerator from './components/ui/page/Timetablegenerator';
+import AdminPanel from './components/AdminPanel';
 
 export default function App() {
   // --- State ---
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useState("dashboard");
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [courses, setCourses] = useState([]);
@@ -83,8 +84,15 @@ export default function App() {
   useEffect(() => {
     if (user) {
       fetchTimetableData();
-      if (user.role === 'student' && activeTab === 'overview') {
-        setActiveTab('student-dashboard');
+      
+      const userPermissions = user?.permissions || {};
+      const accessibleTabs = [
+        "dashboard", "overview", "attendance", "meet", 
+        "ai-tools", "evaluations", "timetable", "admin_settings"
+      ].filter(id => (userPermissions[id] || []).includes("access"));
+
+      if (accessibleTabs.length > 0 && !accessibleTabs.includes(activeTab)) {
+        setActiveTab(accessibleTabs[0]);
       }
     } else {
       setTimetableData({});
@@ -494,16 +502,19 @@ export default function App() {
   if (!authChecked) return <div className="app"><div className="placeholder">Loading...</div></div>;
   if (!user) return <LandingPage onSignIn={handleSignIn} isSyncing={isSyncing} />;
 
-  const tabs = user.role === 'student' 
-    ? [{ id: "student-dashboard", label: "Dashboard" }]
-    : [
-        { id: "overview", label: "Overview" },
-        { id: "attendance", label: "Attendance" },
-        { id: "meet", label: "Meet" },
-        { id: "ai-tools", label: "AI Tools" },
-        { id: "evaluations", label: "Evaluations" },
-        { id: "timetable", label: "Timetable" }
-      ];
+  const allTabs = [
+    { id: "dashboard", label: "Dashboard" },
+    { id: "overview", label: "Overview" },
+    { id: "attendance", label: "Attendance" },
+    { id: "meet", label: "Meet" },
+    { id: "ai-tools", label: "AI Tools" },
+    { id: "evaluations", label: "Evaluations" },
+    { id: "timetable", label: "Timetable" },
+    { id: "admin_settings", label: "Role Management" }
+  ];
+
+  const userPermissions = user.permissions || {};
+  const tabs = allTabs.filter(tab => (userPermissions[tab.id] || []).includes("access"));
 
   return (
     <div className="app">
@@ -524,6 +535,7 @@ export default function App() {
 
         {activeTab === "overview" && (
           <OverviewPanel 
+            permissions={userPermissions["overview"] || []} 
             selectedCourseId={selectedCourseId}
             setSelectedCourseId={setSelectedCourseId}
             courses={courses}
@@ -553,6 +565,7 @@ export default function App() {
 
         {activeTab === "attendance" && (
           <AttendancePanel 
+            permissions={userPermissions["attendance"] || []} 
             selectedCourseId={selectedCourseId}
             setSelectedCourseId={setSelectedCourseId}
             courses={courses}
@@ -598,6 +611,7 @@ export default function App() {
 
         {activeTab === "ai-tools" && (
           <AIToolsPanel 
+            permissions={userPermissions["ai-tools"] || []} 
             isQuotaExceeded={isQuotaExceeded}
             customApiKey={customApiKey}
             setCustomApiKey={setCustomApiKey}
@@ -650,9 +664,10 @@ export default function App() {
 
         {activeTab === "evaluations" && <EvaluationPanel API_BASE={API_BASE} courseId={selectedCourseId} />}
         {activeTab === "timetable" && <Timetablegenerator courses={courses} />}
-        {activeTab === "student-dashboard" && (
-          <StudentDashboard 
+        {activeTab === "dashboard" && (
+          <DashboardRouter 
             API_BASE={API_BASE} 
+            user={user}
             onReadFeedback={(courseId, assignmentId) => {
               if (courseId) setSelectedCourseId(courseId);
               setInitialFeedbackAssignment(assignmentId);
@@ -661,6 +676,7 @@ export default function App() {
             }}
           />
         )}
+        {activeTab === "admin_settings" && <AdminPanel API_BASE={API_BASE} />}
       </div>
     </div>
   );

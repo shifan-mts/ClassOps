@@ -154,6 +154,16 @@ def get_courses_by_teacher(email):
     )
     return decimal_to_native(response.get('Items', []))
 
+def get_all_courses():
+    response = table.scan(
+        FilterExpression="begins_with(PK, :pk_prefix) AND begins_with(SK, :sk_prefix)",
+        ExpressionAttributeValues={
+            ":pk_prefix": "TEACHER#",
+            ":sk_prefix": "COURSE#"
+        }
+    )
+    return decimal_to_native(response.get('Items', []))
+
 def get_students_by_course(course_id):
     response = table.query(
         KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_prefix)",
@@ -299,6 +309,79 @@ def get_evaluations_by_course(course_id):
         ExpressionAttributeValues={
             ":pk": f"COURSE#{course_id}",
             ":sk_prefix": "EVALUATION#"
+        }
+    )
+    return decimal_to_native(response.get('Items', []))
+
+# --- RBAC Operations ---
+
+def get_role(role_name):
+    response = table.get_item(
+        Key={
+            'PK': f"ROLE#{role_name}",
+            'SK': 'METADATA'
+        }
+    )
+    return decimal_to_native(response.get('Item'))
+
+def put_role(role_data):
+    role_name = role_data.get('name')
+    role_data['PK'] = f"ROLE#{role_name}"
+    role_data['SK'] = 'METADATA'
+    table.put_item(Item=sanitize_for_dynamodb(role_data))
+    return role_data
+
+def delete_role(role_name):
+    table.delete_item(
+        Key={
+            'PK': f"ROLE#{role_name}",
+            'SK': 'METADATA'
+        }
+    )
+
+def scan_all_roles():
+    response = table.scan(
+        FilterExpression="begins_with(PK, :pk_prefix) AND SK = :sk",
+        ExpressionAttributeValues={
+            ":pk_prefix": "ROLE#",
+            ":sk": "METADATA"
+        }
+    )
+    return decimal_to_native(response.get('Items', []))
+
+def get_user_role(email):
+    response = table.get_item(
+        Key={
+            'PK': f"USER_ROLE#{email}",
+            'SK': 'METADATA'
+        }
+    )
+    return decimal_to_native(response.get('Item'))
+
+def put_user_role(email, role_name):
+    data = {
+        'PK': f"USER_ROLE#{email}",
+        'SK': 'METADATA',
+        'email': email,
+        'role': role_name
+    }
+    table.put_item(Item=sanitize_for_dynamodb(data))
+    return data
+
+def delete_user_role(email):
+    table.delete_item(
+        Key={
+            'PK': f"USER_ROLE#{email}",
+            'SK': 'METADATA'
+        }
+    )
+
+def scan_all_user_roles():
+    response = table.scan(
+        FilterExpression="begins_with(PK, :pk_prefix) AND SK = :sk",
+        ExpressionAttributeValues={
+            ":pk_prefix": "USER_ROLE#",
+            ":sk": "METADATA"
         }
     )
     return decimal_to_native(response.get('Items', []))

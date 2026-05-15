@@ -1,6 +1,7 @@
 import React from 'react';
 
 const OverviewPanel = ({
+  permissions = [],
   selectedCourseId,
   setSelectedCourseId,
   courses,
@@ -44,13 +45,15 @@ const OverviewPanel = ({
                 <option key={course.id} value={course.id}>{course.name}</option>
               ))}
             </select>
-            <button
-              className="ghost"
-              onClick={() => setShowTargetForm((prev) => !prev)}
-              disabled={!selectedCourseId}
-            >
-              {showTargetForm ? "Close" : "+ Add Syllabus Target"}
-            </button>
+            {permissions.includes("edit") && (
+              <button
+                className="ghost"
+                onClick={() => setShowTargetForm((prev) => !prev)}
+                disabled={!selectedCourseId}
+              >
+                {showTargetForm ? "Close" : "+ Add Syllabus Target"}
+              </button>
+            )}
           </div>
 
           {showTargetForm && (
@@ -88,7 +91,7 @@ const OverviewPanel = ({
                     <button
                       className={`status-pill ${target.completed ? "completed" : "pending"}`}
                       onClick={() => toggleTargetStatus(target.id, !target.completed)}
-                      disabled={isSavingTarget}
+                      disabled={isSavingTarget || !permissions.includes("edit")}
                     >
                       {target.completed
                         ? "Completed"
@@ -141,9 +144,11 @@ const OverviewPanel = ({
           <p>Synced courses from your connected Google Classroom account.</p>
         </div>
         <div className="card-body">
-          <button className="primary" onClick={handleSyncCourses} disabled={isSyncing}>
-            {isSyncing ? "Syncing..." : "Sync Courses"}
-          </button>
+          {permissions.includes("modify") && (
+            <button className="primary" onClick={handleSyncCourses} disabled={isSyncing}>
+              {isSyncing ? "Syncing..." : "Sync Courses"}
+            </button>
+          )}
           {syncError && <p className="error">{syncError}</p>}
           {courses.length > 0 ? (
             <ul className="list">

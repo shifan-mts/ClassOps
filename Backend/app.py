@@ -26,6 +26,7 @@ if _env_bool("ALLOW_INSECURE_OAUTH", _env_bool("IS_LOCAL", True)):
 # Imports that depend on environment setup
 from config.settings import configure_app
 from routes import register_blueprints
+from utils.seed_roles import seed_default_roles
 
 def create_app():
     """Application factory for ClassOps."""
@@ -33,6 +34,9 @@ def create_app():
     
     # Configure security, CORS, and session management
     configure_app(flask_app)
+    
+    # Seed roles
+    seed_default_roles()
     
     # Register all API routes
     register_blueprints(flask_app)
