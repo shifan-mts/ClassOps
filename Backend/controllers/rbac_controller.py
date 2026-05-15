@@ -1,5 +1,6 @@
 from flask import jsonify, request
 from repositories import dynamodb_repository as db
+from datetime import datetime, timedelta
 
 def get_roles():
     roles = db.scan_all_roles()
@@ -12,6 +13,10 @@ def create_role():
     if "permissions" not in data:
         data["permissions"] = {}
     
+    # Custom color support
+    if "color" not in data:
+        data["color"] = "#7289da" # default blurple
+        
     role = db.put_role(data)
     return jsonify(role), 201
 
@@ -44,20 +49,27 @@ def create_role_assignment():
         emails.append(data["email"])
         
     role_name = data.get("role")
+    duration_hrs = data.get("duration_hrs") # Optional duration in hours
     
     if not emails or not role_name:
         return jsonify({"error": "Emails and role are required"}), 400
-        
+    
+    expires_at = None
+    if duration_hrs:
+        try:
+            expires_at = (datetime.now() + timedelta(hours=float(duration_hrs))).isoformat()
+        except:
+            pass
+            
     assignments = []
     for email in emails:
         email = email.strip()
         if email:
-            assignments.append(db.put_user_role(email, role_name))
+            assignments.append(db.put_user_role(email, role_name, expires_at))
             
     return jsonify({"message": "Assignments created successfully", "assignments": assignments}), 201
 
 def delete_role_assignment(email):
-    # Prevent deleting the last admin if possible, but for simplicity just delete
     db.delete_user_role(email)
     return jsonify({"message": "Assignment deleted successfully"})
 

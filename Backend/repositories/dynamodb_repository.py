@@ -358,13 +358,15 @@ def get_user_role(email):
     )
     return decimal_to_native(response.get('Item'))
 
-def put_user_role(email, role_name):
+def put_user_role(email, role_name, expires_at=None):
     data = {
         'PK': f"USER_ROLE#{email}",
         'SK': 'METADATA',
         'email': email,
         'role': role_name
     }
+    if expires_at:
+        data['expires_at'] = expires_at
     table.put_item(Item=sanitize_for_dynamodb(data))
     return data
 
