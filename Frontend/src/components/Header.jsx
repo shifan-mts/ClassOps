@@ -1,8 +1,10 @@
 import React from 'react';
+import { usePermissions } from '../context/PermissionContext';
 
 const Header = ({ user, handleLogout, handleSignIn, isSyncing }) => {
-  const isStudent = user?.role === 'student';
-  
+  const { hasPermission } = usePermissions();
+  const isStudent = hasPermission('student-dashboard', 'access');
+
   return (
     <header className="header">
       <div>
@@ -11,11 +13,12 @@ const Header = ({ user, handleLogout, handleSignIn, isSyncing }) => {
         </p>
         <h1>ClassOps</h1>
         <p className="subtitle">
-          {isStudent 
-            ? "Your centralized hub for assignments, timetables, and classroom materials." 
+          {isStudent
+            ? "Your centralized hub for assignments, timetables, and classroom materials."
             : "Keep syllabus targets, compliance metrics, and AI tools in one focused workspace."}
         </p>
       </div>
+
       <div className="auth-section">
         {user ? (
           <div className="user-profile">

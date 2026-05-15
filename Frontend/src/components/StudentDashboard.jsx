@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { usePermissions } from '../context/PermissionContext';
 
 const StudentDashboard = ({ API_BASE, onReadFeedback }) => {
+  const { hasPermission } = usePermissions();
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -144,150 +146,154 @@ const StudentDashboard = ({ API_BASE, onReadFeedback }) => {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(450px, 1fr))', gap: '24px' }}>
         
         {/* TIMETABLE */}
-        <div className="card" style={{ display: 'flex', flexDirection: 'column' }}>
-          <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <h3>{showTodayOnly ? "Today's Classes" : "Weekly Timetable"}</h3>
-              <p>Your automatically synced classes.</p>
-            </div>
-            <button 
-              onClick={() => setShowTodayOnly(!showTodayOnly)}
-              style={{ padding: '6px 12px', fontSize: '0.8rem', borderRadius: '8px', background: '#e2e8f0', color: '#0f172a', border: 'none', cursor: 'pointer', fontWeight: 600 }}
-            >
-              {showTodayOnly ? "View Weekly" : "View Today"}
-            </button>
-          </div>
-          <div className="card-body">
-            {displayedTimetable.length === 0 ? (
-              <div className="placeholder">No classes scheduled {showTodayOnly ? 'today' : 'yet'}.</div>
-            ) : (
-              <div style={{ display: 'grid', gap: '12px' }}>
-                {displayedTimetable.map(slot => (
-                  <div key={slot.id} style={{
-                    display: 'flex', alignItems: 'center', gap: '16px',
-                    padding: '16px', borderRadius: '16px',
-                    background: '#f8fafc', border: '1px solid #e2e8f0'
-                  }}>
-                    <div style={{ minWidth: '80px', textAlign: 'center' }}>
-                      <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#0f172a' }}>{slot.day.substring(0,3)}</div>
-                      <div style={{ fontSize: '0.75rem', color: '#64748b' }}>{formatTime(slot.start_time)}</div>
-                    </div>
-                    <div style={{ flex: 1, borderLeft: '3px solid #0e1a25', paddingLeft: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <div style={{ fontWeight: 700, fontSize: '1.05rem', color: '#0f172a' }}>{slot.subject}</div>
-                        <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '4px' }}>ClassOps Sync Enabled</div>
-                      </div>
-                      {slot.meet_link && (
-                        <button 
-                          className="primary" 
-                          style={{ padding: '6px 12px', fontSize: '0.8rem', borderRadius: '8px' }}
-                          onClick={() => window.open(slot.meet_link, '_blank')}
-                        >
-                          Join Meet
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
+        {hasPermission('timetable', 'access') && (
+          <div className="card" style={{ display: 'flex', flexDirection: 'column' }}>
+            <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <h3>{showTodayOnly ? "Today's Classes" : "Weekly Timetable"}</h3>
+                <p>Your automatically synced classes.</p>
               </div>
-            )}
-            
-            <button className="primary" style={{ marginTop: 'auto' }} onClick={async () => {
-              try {
-                const res = await fetch(`${API_BASE}/api/student/calendar/sync`, { 
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ slots: timetable }),
-                  credentials: 'include'
-                });
-                const json = await res.json();
-                alert(json.message || json.error);
-              } catch(e) {
-                alert('Sync failed');
-              }
-            }}>Sync to Google Calendar</button>
+              <button 
+                onClick={() => setShowTodayOnly(!showTodayOnly)}
+                style={{ padding: '6px 12px', fontSize: '0.8rem', borderRadius: '8px', background: '#e2e8f0', color: '#0f172a', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+              >
+                {showTodayOnly ? "View Weekly" : "View Today"}
+              </button>
+            </div>
+            <div className="card-body">
+              {displayedTimetable.length === 0 ? (
+                <div className="placeholder">No classes scheduled {showTodayOnly ? 'today' : 'yet'}.</div>
+              ) : (
+                <div style={{ display: 'grid', gap: '12px' }}>
+                  {displayedTimetable.map(slot => (
+                    <div key={slot.id} style={{
+                      display: 'flex', alignItems: 'center', gap: '16px',
+                      padding: '16px', borderRadius: '16px',
+                      background: '#f8fafc', border: '1px solid #e2e8f0'
+                    }}>
+                      <div style={{ minWidth: '80px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#0f172a' }}>{slot.day.substring(0,3)}</div>
+                        <div style={{ fontSize: '0.75rem', color: '#64748b' }}>{formatTime(slot.start_time)}</div>
+                      </div>
+                      <div style={{ flex: 1, borderLeft: '3px solid #0e1a25', paddingLeft: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: '1.05rem', color: '#0f172a' }}>{slot.subject}</div>
+                          <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '4px' }}>ClassOps Sync Enabled</div>
+                        </div>
+                        {slot.meet_link && (
+                          <button 
+                            className="primary" 
+                            style={{ padding: '6px 12px', fontSize: '0.8rem', borderRadius: '8px' }}
+                            onClick={() => window.open(slot.meet_link, '_blank')}
+                          >
+                            Join Meet
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              
+              <button className="primary" style={{ marginTop: 'auto' }} onClick={async () => {
+                try {
+                  const res = await fetch(`${API_BASE}/api/student/calendar/sync`, { 
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ slots: timetable }),
+                    credentials: 'include'
+                  });
+                  const json = await res.json();
+                  alert(json.message || json.error);
+                } catch(e) {
+                  alert('Sync failed');
+                }
+              }}>Sync to Google Calendar</button>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* ASSIGNMENTS */}
-        <div className="card" style={{ display: 'flex', flexDirection: 'column' }}>
-          <div className="card-header">
-            <h3>Assignment Tracker</h3>
-            <p>Track your pending, submitted, and missing work.</p>
-          </div>
-          <div className="card-body" style={{ display: 'grid', gap: '20px' }}>
-            
-            {/* PENDING */}
-            <div>
-              <h4 style={{ margin: '0 0 10px', fontSize: '0.85rem', textTransform: 'uppercase', color: '#b45309', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#f59e0b' }}></span>
-                Pending ({assignments.pending.length})
-              </h4>
-              <div style={{ display: 'grid', gap: '10px' }}>
-                {assignments.pending.map(a => (
-                  <div key={a.id} style={{ padding: '14px', borderRadius: '12px', background: '#fffbeb', border: '1px solid #fef3c7' }}>
-                    <div style={{ fontWeight: 600, color: '#92400e', marginBottom: '4px' }}>{a.title}</div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#b45309' }}>
-                      <span>{a.course_name}</span>
-                      <span style={{ fontWeight: 700 }}>Due: {formatDate(a.due_date)}</span>
-                    </div>
-                  </div>
-                ))}
-                {assignments.pending.length === 0 && <div className="placeholder" style={{ padding: '10px' }}>All caught up!</div>}
-              </div>
+        {hasPermission('student-dashboard', 'view') && (
+          <div className="card" style={{ display: 'flex', flexDirection: 'column' }}>
+            <div className="card-header">
+              <h3>Assignment Tracker</h3>
+              <p>Track your pending, submitted, and missing work.</p>
             </div>
-
-            {/* MISSING */}
-            {assignments.missing.length > 0 && (
+            <div className="card-body" style={{ display: 'grid', gap: '20px' }}>
+              
+              {/* PENDING */}
               <div>
-                <h4 style={{ margin: '0 0 10px', fontSize: '0.85rem', textTransform: 'uppercase', color: '#9b1c1c', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#ef4444' }}></span>
-                  Missing ({assignments.missing.length})
+                <h4 style={{ margin: '0 0 10px', fontSize: '0.85rem', textTransform: 'uppercase', color: '#b45309', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#f59e0b' }}></span>
+                  Pending ({assignments.pending.length})
                 </h4>
                 <div style={{ display: 'grid', gap: '10px' }}>
-                  {assignments.missing.map(a => (
-                    <div key={a.id} style={{ padding: '14px', borderRadius: '12px', background: '#fef2f2', border: '1px solid #fee2e2' }}>
-                      <div style={{ fontWeight: 600, color: '#991b1b', marginBottom: '4px' }}>{a.title}</div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#b91c1c' }}>
+                  {assignments.pending.map(a => (
+                    <div key={a.id} style={{ padding: '14px', borderRadius: '12px', background: '#fffbeb', border: '1px solid #fef3c7' }}>
+                      <div style={{ fontWeight: 600, color: '#92400e', marginBottom: '4px' }}>{a.title}</div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#b45309' }}>
                         <span>{a.course_name}</span>
-                        <span style={{ fontWeight: 700 }}>Past Due: {formatDate(a.due_date)}</span>
+                        <span style={{ fontWeight: 700 }}>Due: {formatDate(a.due_date)}</span>
+                      </div>
+                    </div>
+                  ))}
+                  {assignments.pending.length === 0 && <div className="placeholder" style={{ padding: '10px' }}>All caught up!</div>}
+                </div>
+              </div>
+
+              {/* MISSING */}
+              {assignments.missing.length > 0 && (
+                <div>
+                  <h4 style={{ margin: '0 0 10px', fontSize: '0.85rem', textTransform: 'uppercase', color: '#9b1c1c', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#ef4444' }}></span>
+                    Missing ({assignments.missing.length})
+                  </h4>
+                  <div style={{ display: 'grid', gap: '10px' }}>
+                    {assignments.missing.map(a => (
+                      <div key={a.id} style={{ padding: '14px', borderRadius: '12px', background: '#fef2f2', border: '1px solid #fee2e2' }}>
+                        <div style={{ fontWeight: 600, color: '#991b1b', marginBottom: '4px' }}>{a.title}</div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#b91c1c' }}>
+                          <span>{a.course_name}</span>
+                          <span style={{ fontWeight: 700 }}>Past Due: {formatDate(a.due_date)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* SUBMITTED */}
+              <div>
+                <h4 style={{ margin: '0 0 10px', fontSize: '0.85rem', textTransform: 'uppercase', color: '#0f8a5f', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }}></span>
+                  Completed ({assignments.submitted.length})
+                </h4>
+                <div style={{ display: 'grid', gap: '10px' }}>
+                  {assignments.submitted.map(a => (
+                    <div key={a.id} style={{ padding: '14px', borderRadius: '12px', background: '#ecfdf5', border: '1px solid #d1fae5', opacity: 0.8 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <div style={{ fontWeight: 600, color: '#065f46', marginBottom: '4px', textDecoration: 'line-through' }}>{a.title}</div>
+                        {a.score && <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#047857' }}>{a.score}</div>}
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ fontSize: '0.8rem', color: '#059669' }}>{a.course_name}</div>
+                        <button 
+                          className="ghost" 
+                          onClick={() => onReadFeedback && onReadFeedback(a.course_id, a.id)}
+                          style={{ padding: '4px 8px', fontSize: '0.75rem', background: '#d1fae5', color: '#065f46' }}
+                        >
+                          Read Feedback
+                        </button>
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
-            )}
 
-            {/* SUBMITTED */}
-            <div>
-              <h4 style={{ margin: '0 0 10px', fontSize: '0.85rem', textTransform: 'uppercase', color: '#0f8a5f', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }}></span>
-                Completed ({assignments.submitted.length})
-              </h4>
-              <div style={{ display: 'grid', gap: '10px' }}>
-                {assignments.submitted.map(a => (
-                  <div key={a.id} style={{ padding: '14px', borderRadius: '12px', background: '#ecfdf5', border: '1px solid #d1fae5', opacity: 0.8 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <div style={{ fontWeight: 600, color: '#065f46', marginBottom: '4px', textDecoration: 'line-through' }}>{a.title}</div>
-                      {a.score && <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#047857' }}>{a.score}</div>}
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div style={{ fontSize: '0.8rem', color: '#059669' }}>{a.course_name}</div>
-                      <button 
-                        className="ghost" 
-                        onClick={() => onReadFeedback && onReadFeedback(a.course_id, a.id)}
-                        style={{ padding: '4px 8px', fontSize: '0.75rem', background: '#d1fae5', color: '#065f46' }}
-                      >
-                        Read Feedback
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
             </div>
-
           </div>
-        </div>
+        )}
       </div>
 
       {/* BOTTOM SECTIONS: My Classrooms & Materials */}

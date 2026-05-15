@@ -16,7 +16,6 @@ env/
 *.swo
 
 # Project specific
-.env
 *.json
 !package.json
 !jsconfig.json
@@ -40,3 +39,5 @@ Frontend/package-lock.json
 # OS files
 .DS_Store
 Thumbs.db
+config.bat
+node_modules

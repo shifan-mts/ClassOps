@@ -15,7 +15,6 @@ from services.google_service import (
     sync_classroom_data,
 )
 from services.teacher_service import get_authenticated_teacher
-from config.rbac import get_role_permissions
 
 
 def _load_google_client_config_from_env():
@@ -126,9 +125,10 @@ def google_auth_callback():
             parsed["role"] = "visitor"
             current_app.logger.info(f"Unauthorized email {email} assigned visitor role.")
 
-        # Fetch permissions from DB, fallback to static config
+        # Fetch permissions and department ONLY from DB
         role_record = db.get_role(parsed["role"])
-        permissions = role_record.get("permissions", {}) if role_record else get_role_permissions(parsed["role"])
+        permissions = role_record.get("permissions", {}) if role_record else {}
+        department = role_record.get("department", "Common") if role_record else "Common"
 
         # Prepare user object
         user_data = {
@@ -137,7 +137,8 @@ def google_auth_callback():
             "name": name,
             "picture": user_info.get("picture"),
             "role": parsed["role"],
-            "permissions": permissions
+            "permissions": permissions,
+            "department": department
         }
 
         if parsed["role"] == "student":
@@ -197,6 +198,25 @@ def get_me():
             session.modified = True
 
     return jsonify({"authenticated": True, "user": user_data})
+
+
+def get_permissions():
+    if "user" not in session:
+        return jsonify({"error": "Not authenticated"}), 401
+    
+    user_data = session["user"]
+    role_name = user_data.get("role")
+    
+    if not role_name:
+        return jsonify({"permissions": {}})
+    
+    role_record = db.get_role(role_name)
+    permissions = role_record.get("permissions", {}) if role_record else {}
+    
+    return jsonify({
+        "role": role_name,
+        "permissions": permissions
+    })
 
 
 def logout():

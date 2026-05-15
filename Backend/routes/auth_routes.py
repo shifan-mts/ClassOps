@@ -30,6 +30,11 @@ def get_me():
     return auth_controller.get_me()
 
 
+@auth_bp.route("/api/auth/permissions")
+def get_permissions():
+    return auth_controller.get_permissions()
+
+
 @auth_bp.route("/api/auth/logout", methods=["POST", "GET"])
 def logout():
     return auth_controller.logout()

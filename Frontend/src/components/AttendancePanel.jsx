@@ -1,5 +1,6 @@
 import React from 'react';
 import AttendanceReport from './AttendanceReport';
+import { usePermissions } from '../context/PermissionContext';
 
 const AttendancePanel = ({
   selectedCourseId,
@@ -20,6 +21,8 @@ const AttendancePanel = ({
   fetchReport,
   onViewFeedback
 }) => {
+  const { hasPermission } = usePermissions();
+
   const getStatusColor = (status) => {
     switch (status) {
       case "Present": return "#0f8a5f";
@@ -38,12 +41,16 @@ const AttendancePanel = ({
             <p>Log presence for the selected subject and date.</p>
           </div>
           <div style={{ display: 'flex', gap: '8px' }}>
-            <button className="ghost" onClick={handleExportCSV} style={{ padding: '6px 12px', fontSize: '0.85rem' }}>
-              Export CSV
-            </button>
-            <button className="ghost" onClick={() => onViewFeedback(null)} style={{ padding: '6px 12px', fontSize: '0.85rem' }}>
-              View Feedback
-            </button>
+            {hasPermission('attendance', 'view') && (
+              <button className="ghost" onClick={handleExportCSV} style={{ padding: '6px 12px', fontSize: '0.85rem' }}>
+                Export CSV
+              </button>
+            )}
+            {hasPermission('evaluation', 'view') && (
+              <button className="ghost" onClick={() => onViewFeedback(null)} style={{ padding: '6px 12px', fontSize: '0.85rem' }}>
+                View Feedback
+              </button>
+            )}
           </div>
         </div>
         <div className="card-body">
@@ -63,13 +70,19 @@ const AttendancePanel = ({
               value={attendanceDate}
               onChange={(e) => setAttendanceDate(e.target.value)}
             />
-            <button className="ghost" onClick={syncStudents} disabled={isSyncing}>
-              {isSyncing ? "Syncing..." : "Sync Roster"}
-            </button>
-            <button className="ghost" onClick={handleMarkAllPresent} style={{ border: '1px solid #0f8a5f', color: '#0f8a5f' }}>
-              Mark All Present
-            </button>
-            <button className="primary" onClick={saveAttendance}>Save Attendance</button>
+            {hasPermission('attendance', 'manage') && (
+              <button className="ghost" onClick={syncStudents} disabled={isSyncing}>
+                {isSyncing ? "Syncing..." : "Sync Roster"}
+              </button>
+            )}
+            {hasPermission('attendance', 'edit') && (
+              <button className="ghost" onClick={handleMarkAllPresent} style={{ border: '1px solid #0f8a5f', color: '#0f8a5f' }}>
+                Mark All Present
+              </button>
+            )}
+            {hasPermission('attendance', 'edit') && (
+              <button className="primary" onClick={saveAttendance}>Save Attendance</button>
+            )}
           </div>
 
           {students.length > 0 ? (
@@ -90,15 +103,18 @@ const AttendancePanel = ({
                       <td>{s.roll_number}</td>
                       <td>{s.name}</td>
                       <td>
-                        <button 
-                          className="ghost sm" 
-                          onClick={() => onViewFeedback(s.google_student_id || s.id)}
-                        >
-                          Grade/Feedback
-                        </button>
+                        {hasPermission('evaluation', 'view') && (
+                          <button 
+                            className="ghost sm" 
+                            onClick={() => onViewFeedback(s.google_student_id || s.id)}
+                          >
+                            Grade/Feedback
+                          </button>
+                        )}
                       </td>
                       <td style={{ textAlign: 'right' }}>
                         <select
+                          disabled={!hasPermission('attendance', 'edit')}
                           value={status}
                           onChange={(e) => handleAttendanceChange(s.id, e.target.value)}
                           style={{ 
@@ -125,11 +141,13 @@ const AttendancePanel = ({
         </div>
       </div>
 
-      <AttendanceReport 
-        report={report} 
-        loading={isReportLoading} 
-        onRefresh={fetchReport} 
-      />
+      {hasPermission('attendance', 'view') && (
+        <AttendanceReport 
+          report={report} 
+          loading={isReportLoading} 
+          onRefresh={fetchReport} 
+        />
+      )}
     </section>
   );
 };
