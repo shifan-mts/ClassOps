@@ -10,7 +10,10 @@ def get_attendance():
     return attendance_controller.get_attendance()
 
 
+from utils.rbac_middleware import require_permission
+
 @attendance_bp.route("/api/attendance", methods=["POST"])
+@require_permission(module="attendance", permission="edit")
 def mark_attendance():
     return attendance_controller.mark_attendance()
 

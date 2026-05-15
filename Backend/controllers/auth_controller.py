@@ -15,6 +15,7 @@ from services.google_service import (
     sync_classroom_data,
 )
 from services.teacher_service import get_authenticated_teacher
+from config.rbac import get_role_permissions
 
 
 def _load_google_client_config_from_env():
@@ -115,9 +116,19 @@ def google_auth_callback():
         if email == "angelinehephzibahj@gmail.com":
             parsed["role"] = "teacher"
 
+        # Check DB for explicit role assignment
+        explicit_role = db.get_user_role(email)
+        if explicit_role:
+            parsed["role"] = explicit_role["role"]
+
         if parsed["role"] == "unknown":
-            session.clear()
-            return jsonify({"error": "Unauthorized. Please use a valid college email address."}), 403
+            # Fallback to visitor instead of denying access
+            parsed["role"] = "visitor"
+            current_app.logger.info(f"Unauthorized email {email} assigned visitor role.")
+
+        # Fetch permissions from DB, fallback to static config
+        role_record = db.get_role(parsed["role"])
+        permissions = role_record.get("permissions", {}) if role_record else get_role_permissions(parsed["role"])
 
         # Prepare user object
         user_data = {
@@ -125,7 +136,8 @@ def google_auth_callback():
             "email": email,
             "name": name,
             "picture": user_info.get("picture"),
-            "role": parsed["role"]
+            "role": parsed["role"],
+            "permissions": permissions
         }
 
         if parsed["role"] == "student":
@@ -173,14 +185,18 @@ def get_me():
     if "user" not in session:
         return jsonify({"authenticated": False}), 401
 
-    creds = session.get("credentials", {})
-    current_app.logger.info(
-        "Checking session for %s | Current Token Scopes: %s",
-        session["user"].get("email"),
-        creds.get("scopes"),
-    )
+    user_data = session["user"]
+    role_name = user_data.get("role")
+    
+    # Refresh permissions from DB to reflect any recent changes
+    if role_name:
+        role_record = db.get_role(role_name)
+        if role_record:
+            user_data["permissions"] = role_record.get("permissions", {})
+            session["user"] = user_data
+            session.modified = True
 
-    return jsonify({"authenticated": True, "user": session["user"]})
+    return jsonify({"authenticated": True, "user": user_data})
 
 
 def logout():

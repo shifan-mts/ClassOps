@@ -17,7 +17,7 @@ def parse_jerusalem_email(email: str, current_year: int = 2026):
     teacher_whitelist = [
         "amohamedshifan1@gmail.com",
         "bharadwajvaradan2005@gmail.com",
-        "bharatmannar@gmail.com"
+        "bharatmannar@gmail.com" # Also in admin, but admin catches it first
     ]
     if email.lower() in teacher_whitelist:
         result["role"] = "teacher"

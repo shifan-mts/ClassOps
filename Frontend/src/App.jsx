@@ -9,12 +9,13 @@ import AttendancePanel from './components/AttendancePanel';
 import AIToolsPanel from './components/AIToolsPanel';
 import EvaluationPanel from './components/EvaluationPanel';
 import MeetAttendancePanel from './components/MeetAttendancePanel';
-import StudentDashboard from './components/StudentDashboard';
+import DashboardRouter from './components/DashboardRouter';
 import Timetablegenerator from './components/ui/page/Timetablegenerator';
+import AdminPanel from './components/AdminPanel';
 
 export default function App() {
   // --- State ---
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useState("dashboard");
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [courses, setCourses] = useState([]);
@@ -83,8 +84,15 @@ export default function App() {
   useEffect(() => {
     if (user) {
       fetchTimetableData();
-      if (user.role === 'student' && activeTab === 'overview') {
-        setActiveTab('student-dashboard');
+      
+      const userPermissions = user?.permissions || {};
+      const accessibleTabs = [
+        "dashboard", "overview", "attendance", "meet", 
+        "ai-tools", "evaluations", "timetable", "admin_settings"
+      ].filter(id => (userPermissions[id] || []).includes("access"));
+
+      if (accessibleTabs.length > 0 && !accessibleTabs.includes(activeTab)) {
+        setActiveTab(accessibleTabs[0]);
       }
     } else {
       setTimetableData({});
@@ -402,6 +410,38 @@ export default function App() {
     }
   };
 
+  const handleMarkAllPresent = () => {
+    setAttendanceRecords(prev => {
+      const next = { ...prev };
+      students.forEach(s => {
+        next[s.id] = "Present";
+      });
+      return next;
+    });
+  };
+
+  const handleExportCSV = () => {
+    if (students.length === 0) return alert("No data to export.");
+    const headers = ["Roll Number", "Name", "Status"];
+    const rows = students.map(s => [
+      s.roll_number,
+      s.name,
+      attendanceRecords[s.id] || "Present"
+    ]);
+    
+    let csvContent = "data:text/csv;charset=utf-8," 
+      + headers.join(",") + "\n"
+      + rows.map(e => e.join(",")).join("\n");
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `attendance_${selectedCourseId}_${attendanceDate}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const fetchReport = async (courseId) => {
     if (!courseId) return;
     setIsReportLoading(true);
@@ -494,16 +534,19 @@ export default function App() {
   if (!authChecked) return <div className="app"><div className="placeholder">Loading...</div></div>;
   if (!user) return <LandingPage onSignIn={handleSignIn} isSyncing={isSyncing} />;
 
-  const tabs = user.role === 'student' 
-    ? [{ id: "student-dashboard", label: "Dashboard" }]
-    : [
-        { id: "overview", label: "Overview" },
-        { id: "attendance", label: "Attendance" },
-        { id: "meet", label: "Meet" },
-        { id: "ai-tools", label: "AI Tools" },
-        { id: "evaluations", label: "Evaluations" },
-        { id: "timetable", label: "Timetable" }
-      ];
+  const allTabs = [
+    { id: "dashboard", label: "Dashboard" },
+    { id: "overview", label: "Overview" },
+    { id: "attendance", label: "Attendance" },
+    { id: "meet", label: "Meet" },
+    { id: "ai-tools", label: "AI Tools" },
+    { id: "evaluations", label: "Evaluations" },
+    { id: "timetable", label: "Timetable" },
+    { id: "admin_settings", label: "Role Management" }
+  ];
+
+  const userPermissions = user.permissions || {};
+  const tabs = allTabs.filter(tab => (userPermissions[tab.id] || []).includes("access"));
 
   return (
     <div className="app">
@@ -524,6 +567,7 @@ export default function App() {
 
         {activeTab === "overview" && (
           <OverviewPanel 
+            permissions={userPermissions["overview"] || []} 
             selectedCourseId={selectedCourseId}
             setSelectedCourseId={setSelectedCourseId}
             courses={courses}
@@ -553,6 +597,7 @@ export default function App() {
 
         {activeTab === "attendance" && (
           <AttendancePanel 
+            permissions={userPermissions["attendance"] || []} 
             selectedCourseId={selectedCourseId}
             setSelectedCourseId={setSelectedCourseId}
             courses={courses}
@@ -564,6 +609,8 @@ export default function App() {
             students={students}
             attendanceRecords={attendanceRecords}
             handleAttendanceChange={(id, stat) => setAttendanceRecords(p => ({ ...p, [id]: stat }))}
+            handleMarkAllPresent={handleMarkAllPresent}
+            handleExportCSV={handleExportCSV}
             report={report}
             isReportLoading={isReportLoading}
             fetchReport={() => fetchReport(selectedCourseId)}
@@ -598,6 +645,7 @@ export default function App() {
 
         {activeTab === "ai-tools" && (
           <AIToolsPanel 
+            permissions={userPermissions["ai-tools"] || []} 
             isQuotaExceeded={isQuotaExceeded}
             customApiKey={customApiKey}
             setCustomApiKey={setCustomApiKey}
@@ -650,9 +698,10 @@ export default function App() {
 
         {activeTab === "evaluations" && <EvaluationPanel API_BASE={API_BASE} courseId={selectedCourseId} />}
         {activeTab === "timetable" && <Timetablegenerator courses={courses} />}
-        {activeTab === "student-dashboard" && (
-          <StudentDashboard 
+        {activeTab === "dashboard" && (
+          <DashboardRouter 
             API_BASE={API_BASE} 
+            user={user}
             onReadFeedback={(courseId, assignmentId) => {
               if (courseId) setSelectedCourseId(courseId);
               setInitialFeedbackAssignment(assignmentId);
@@ -661,6 +710,7 @@ export default function App() {
             }}
           />
         )}
+        {activeTab === "admin_settings" && <AdminPanel API_BASE={API_BASE} />}
       </div>
     </div>
   );
