@@ -2,6 +2,9 @@ import os
 import sys
 from dotenv import load_dotenv
 from flask import Flask, send_from_directory
+import threading
+import time
+from datetime import datetime
 
 # Ensure Backend directory is in sys.path
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -52,6 +55,24 @@ def create_app():
         if os.path.exists(file_path):
             return send_from_directory(flask_app.static_folder, path)
         return send_from_directory(flask_app.static_folder, "index.html")
+
+    # Start background thread for role expiry cleanup
+    def role_expiry_check():
+        from repositories import dynamodb_repository as db
+        while True:
+            try:
+                assignments = db.scan_all_user_roles()
+                now = datetime.now().isoformat()
+                for a in assignments:
+                    if a.get('expires_at') and a['expires_at'] < now:
+                        print(f"Role expired for {a['email']}. Resetting to visitor.")
+                        db.put_user_role(a['email'], "visitor")
+            except Exception as e:
+                print(f"Error in role expiry check: {e}")
+            time.sleep(60) # Check every minute
+
+    expiry_thread = threading.Thread(target=role_expiry_check, daemon=True)
+    expiry_thread.start()
 
     return flask_app
 
