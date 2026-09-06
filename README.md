@@ -4,7 +4,7 @@
 
 ---
 
-## 🚀 Key Institutional Features
+## 🚀 Key Features
 
 - **Simplified RBAC (Dual-Tier Matrix):** A refined Role-Based Access Control system focusing on `VIEW` and `EDIT` permissions for total administrative clarity.
 - **Bulk Deployment Suite:** Orchestrate large-scale onboarding by deploying institutional roles and member assignments via JSON specifications.
@@ -14,37 +14,34 @@
 
 ---
 
-## 🏗 System Architecture
+## ⚙️ Getting Started
 
-### Institutional Command Center (`/admin`)
-The centralized administrative authority. A standalone website featuring a **high-end shadcn-inspired dark theme**.
-- **Identities Management:** Define roles and tag them with parent departments (e.g., CSE, MECH).
-- **Focused Matrix:** A 2-tier grid to toggle capabilities per role:
-    - `VIEW`: Data acquisition and visibility rights.
-    - `EDIT`: Content mutation and system-level authority.
-- **Bulk Operations:** Drag-and-drop JSON deployment for mass identity provisioning.
+### Prerequisites
+- **Python** 3.9+
+- **Node.js** 18+ and npm
 
-### Optimized Native Frontend
-A high-performance React/Vite application built for maximum productivity:
-- **Automatic Routing:** Upon login, the system discovers authorized portals and defaults to the most relevant dashboard (Student vs. Teacher).
-- **Core Feature Set:** Focused on 7 institutional nodes: Insights, Portal, Attendance, Meet, AI Tools, Evaluations, and Timetable.
+### Backend
+```bash
+cd backend
+python -m venv .venv
+# Windows:
+.venv\Scripts\activate
+# macOS/Linux:
+# source .venv/bin/activate
+pip install -r requirements.txt
+python app.py
+```
 
----
+The backend serves on `http://localhost:5000` (see `.env.example` → `BASE_URL`).
 
-## 🛠 Tech Stack
+### Frontend
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-- **Frontend:** React (Vite), TailwindCSS, Vue.js (Admin UI)
-- **Backend:** Flask (Python), Jinja2
-- **Database:** AWS DynamoDB (Scalable NoSQL with persistent institutional registry)
-- **Integrations:** Google Classroom API, Google Calendar, Gemini AI (Vertex AI)
-
----
-
-## ⚙️ Institutional Setup
-
-### Deployment
-1. `cd Backend` -> `pip install -r requirements.txt` -> `python app.py`
-2. `cd Frontend` -> `npm install` -> `npm run dev`
+The dev server starts at `http://localhost:5173`.
 
 ### Administrative Access
 Navigate to `{BACKEND_URL}/admin`
@@ -54,8 +51,10 @@ Navigate to `{BACKEND_URL}/admin`
 
 ---
 
-## 🔒 Security & Integrity
+## 🧪 Testing
 
-- **Database-First:** The system is 100% database-driven. Configurations are permanent and never reset on server restarts.
-- **API Hardening:** Every endpoint is protected by real-time institutional permission decorators.
-- **Isolated Control:** Administrative functions are decoupled from Google OAuth to minimize the attack surface.
+Lint the frontend from `frontend/`:
+
+```bash
+npm run lint
+```

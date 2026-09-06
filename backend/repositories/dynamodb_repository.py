@@ -95,7 +95,6 @@ def ensure_table_exists():
             print(f"Error connecting to DynamoDB: {e}")
             raise
 
-# Run the existence check/creation
 ensure_table_exists()
 
 # --- Core Helper Functions for Auth & Sync ---

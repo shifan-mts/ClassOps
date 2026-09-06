@@ -104,10 +104,9 @@ const EvaluationPanel = ({ API_BASE, courseId }) => {
                   const avg = averages[q.id] || 0;
                   const percentage = (avg / 5) * 100;
                   
-                  // Color coding based on average
-                  let barColor = '#10b981'; // Green for high
-                  if (avg < 3) barColor = '#ef4444'; // Red for low
-                  else if (avg < 4) barColor = '#f59e0b'; // Yellow for medium
+                  let barColor = '#10b981';
+                  if (avg < 3) barColor = '#ef4444';
+                  else if (avg < 4) barColor = '#f59e0b';
 
                   return (
                     <div key={q.id} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>

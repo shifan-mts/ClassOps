@@ -13,11 +13,9 @@ def create_role():
     if "permissions" not in data:
         data["permissions"] = {}
     
-    # Department support
     if "department" not in data:
         data["department"] = "Common"
     
-    # Custom color support
     if "color" not in data:
         data["color"] = "#7289da" # default blurple
         
@@ -56,7 +54,7 @@ def create_role_assignment():
         emails.append(data["email"])
         
     role_name = data.get("role")
-    duration_hrs = data.get("duration_hrs") # Optional duration in hours
+    duration_hrs = data.get("duration_hrs")
     
     if not emails or not role_name:
         return jsonify({"error": "Emails and role are required"}), 400
@@ -99,7 +97,6 @@ def bulk_import():
     roles = data.get("roles", [])
     for role_data in roles:
         if role_data.get("name"):
-            # Ensure mandatory fields
             if "permissions" not in role_data:
                 role_data["permissions"] = {}
             if "department" not in role_data:

@@ -2,7 +2,6 @@ import os
 import sys
 from dotenv import load_dotenv
 
-# Add Backend to path
 BACKEND_DIR = os.getcwd()
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
@@ -32,7 +31,6 @@ def list_all_emails():
             elif pk.startswith('USER_ROLE#'):
                 emails.add(pk.replace('USER_ROLE#', ''))
             
-            # Check email attribute
             if 'email' in item:
                 emails.add(item['email'])
                 

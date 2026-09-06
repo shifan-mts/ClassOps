@@ -52,13 +52,10 @@ class AIDetector:
         # AI texts typically have very uniform sentence lengths (low SD)
         b_score = 1 if burstiness < 4.5 else 0
         
-        # Weighted Probability (0.6*Entropy + 0.4*Burstiness)
-        # We scale it to 100%
         ai_prob = (0.6 * e_score + 0.4 * b_score) * 100
         
         # Add a subtle "shading" based on raw values for more realistic results
         if ai_prob > 0:
-            # Slightly adjust based on how far below threshold they are
             adjustment = (4.0 - entropy) * 5 if entropy < 4.0 else 0
             ai_prob = min(99.0, ai_prob + adjustment)
 

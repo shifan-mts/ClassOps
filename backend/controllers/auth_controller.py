@@ -130,7 +130,6 @@ def google_auth_callback():
         permissions = role_record.get("permissions", {}) if role_record else {}
         department = role_record.get("department", "Common") if role_record else "Common"
 
-        # Prepare user object
         user_data = {
             "id": user_info.get("id"),
             "email": email,

@@ -38,13 +38,10 @@ def create_app():
     # Configure security, CORS, and session management
     configure_app(flask_app)
     
-    # Seed roles
     seed_default_roles()
     
-    # Register all API routes
     register_blueprints(flask_app)
     
-    # Serve the frontend application
     @flask_app.route("/")
     def serve():
         return send_from_directory(flask_app.static_folder, "index.html")
@@ -69,7 +66,7 @@ def create_app():
                         db.put_user_role(a['email'], "visitor")
             except Exception as e:
                 print(f"Error in role expiry check: {e}")
-            time.sleep(60) # Check every minute
+            time.sleep(60)
 
     expiry_thread = threading.Thread(target=role_expiry_check, daemon=True)
     expiry_thread.start()

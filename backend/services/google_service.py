@@ -337,7 +337,6 @@ def sync_classroom_data(credentials_dict=None):
 
     email = user_info.get("email")
 
-    # Fetch courses from Google Classroom
     results = service.courses().list(pageSize=10).execute()
     courses_data = results.get("courses", [])
 

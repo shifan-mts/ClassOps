@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import './App.css';
 import { usePermissions } from './context/PermissionContext';
 
-// Components
 import Header from './components/Header';
 import LandingPage from './components/LandingPage';
 import DashboardPanel from './components/DashboardPanel';
