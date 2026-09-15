@@ -1,10 +1,10 @@
-# 🎓 ClassOps – Institutional Workflow Automation
+# ClassOps – Institutional Workflow Automation
 
 **ClassOps** is a streamlined, enterprise-grade institutional management platform. It empowers educators and administrators to automate academic workflows with a focus on speed, security, and high-fidelity institutional insights.
 
 ---
 
-## 🚀 Key Features
+## Key Features
 
 - **Simplified RBAC (Dual-Tier Matrix):** A refined Role-Based Access Control system focusing on `VIEW` and `EDIT` permissions for total administrative clarity.
 - **Bulk Deployment Suite:** Orchestrate large-scale onboarding by deploying institutional roles and member assignments via JSON specifications.
@@ -14,7 +14,7 @@
 
 ---
 
-## ⚙️ Getting Started
+## Getting Started
 
 ### Prerequisites
 - **Python** 3.9+
@@ -51,7 +51,7 @@ Navigate to `{BACKEND_URL}/admin`
 
 ---
 
-## 🧪 Testing
+## Testing
 
 Lint the frontend from `frontend/`:
 

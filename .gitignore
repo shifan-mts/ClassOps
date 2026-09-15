@@ -44,8 +44,6 @@ instance/
 .python-version
 
 # Secrets & environment files (never commit)
-.env
-.env.*
 !.env.example
 backend/.env
 backend/.env.*
@@ -86,7 +84,6 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # ---------- Editors / IDEs ----------
-.vscode/*
 !.vscode/extensions.json
 .idea/
 *.suo
